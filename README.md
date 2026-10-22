@@ -1,3 +1,24 @@
-# figma-html-plugin
+# Banner Export — Figma-плагін
 
-Figma plugin that exports banners to HTML5.
+Експортує фрейм банера з Figma у HTML5 ZIP для рекламних мереж. Анімації елементів (поява, цикл, hover) додаються у наступних фазах. План: https://claude.ai/artifact/9MWjdv2ZQis4LJDQQm558M
+
+## Фаза 0 (прототип)
+
+- Фрейми, групи, прямокутники й еліпси із суцільною заливкою, обведенням, тінями та радіусами відтворюються CSS.
+- Текст відтворюється HTML з усіма стилями сегментів; шрифти підключаються з Google Fonts.
+- Вектори експортуються як SVG. Картинки, маски, градієнти й складні ефекти експортуються як PNG @2x. Фон контейнера з градієнтом або картинкою стає окремою картинкою, а дочірні шари лишаються окремими.
+- ZIP містить `index.html` із `<meta name="ad.size">` і `clickTag`, а також папку `img/`. Однакові картинки записуються один раз.
+
+## Як запустити у Figma
+
+1. `npm install`
+2. `npm run build` (або `npm run watch` під час розробки)
+3. У Figma Desktop: Plugins → Development → Import plugin from manifest… → вибрати `manifest.json` з цієї папки.
+4. Виділити фрейм банера → Plugins → Development → Banner Export.
+
+## Розробка
+
+- `src/main` — код у пісочниці Figma: читає шари і будує проміжну модель (`src/shared/ir.ts`).
+- `src/core` — генератор HTML/CSS без залежності від Figma.
+- `src/ui` — інтерфейс плагіна: превʼю і збирання ZIP.
+- `npm test` — тести генератора, `npm run typecheck` — перевірка типів.
