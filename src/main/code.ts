@@ -1,5 +1,5 @@
-import type { BannerSettings, LayerAnim } from '../shared/anim';
-import { isEmptyAnim, parseAnim, parseSettings } from '../shared/anim';
+import type { BannerSettings, LayerAnim, Preset, PresetScope } from '../shared/anim';
+import { isEmptyAnim, parseAnim, parsePresets, parseSettings } from '../shared/anim';
 import type { BuildPurpose, FrameInfo, LayerInfo, MainMessage, UiMessage } from '../shared/messages';
 import { serializeBanner } from './serialize';
 
@@ -7,6 +7,7 @@ type BannerFrame = FrameNode | ComponentNode | InstanceNode;
 
 const ANIM_KEY = 'anim';
 const SETTINGS_KEY = 'banner';
+const PRESETS_KEY = 'presets';
 
 figma.showUI(__html__, { width: 380, height: 680, themeColors: true });
 
@@ -100,8 +101,41 @@ async function selectLayer(nodeId: string): Promise<void> {
   }
 }
 
+async function readPresets(scope: PresetScope): Promise<Preset[]> {
+  if (scope === 'file') return parsePresets(figma.root.getPluginData(PRESETS_KEY));
+  const stored: unknown = await figma.clientStorage.getAsync(PRESETS_KEY);
+  return parsePresets(typeof stored === 'string' ? stored : '');
+}
+
+async function writePresets(scope: PresetScope, presets: Preset[]): Promise<void> {
+  const json = JSON.stringify(presets);
+  if (scope === 'file') figma.root.setPluginData(PRESETS_KEY, json);
+  else await figma.clientStorage.setAsync(PRESETS_KEY, json);
+}
+
+async function sendPresets(): Promise<void> {
+  post({ type: 'presets', file: await readPresets('file'), mine: await readPresets('mine') });
+}
+
+async function savePresets(scope: PresetScope, incoming: Preset[]): Promise<void> {
+  const list = await readPresets(scope);
+  for (const preset of incoming) {
+    const i = list.findIndex((p) => p.id === preset.id || p.name === preset.name);
+    if (i >= 0) list[i] = { ...preset, id: list[i].id };
+    else list.push(preset);
+  }
+  await writePresets(scope, list);
+  await sendPresets();
+}
+
+async function deletePreset(scope: PresetScope, id: string): Promise<void> {
+  await writePresets(scope, (await readPresets(scope)).filter((p) => p.id !== id));
+  await sendPresets();
+}
+
 figma.on('selectionchange', sendState);
 sendState();
+void sendPresets();
 
 figma.ui.onmessage = async (msg: UiMessage) => {
   try {
@@ -117,6 +151,12 @@ figma.ui.onmessage = async (msg: UiMessage) => {
         break;
       case 'select-layer':
         await selectLayer(msg.nodeId);
+        break;
+      case 'save-presets':
+        await savePresets(msg.scope, parsePresets(JSON.stringify(msg.presets)));
+        break;
+      case 'delete-preset':
+        await deletePreset(msg.scope, msg.id);
         break;
       case 'close':
         figma.closePlugin();

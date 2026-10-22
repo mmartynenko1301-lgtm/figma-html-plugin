@@ -5,7 +5,8 @@ import type { BundleItem } from '../core/bundle';
 import { bundleFiles, uniqueBases } from '../core/bundle';
 import { generate } from '../core/generate';
 import { NETWORKS, validate } from '../core/networks';
-import type { BannerSettings, Easing, HoverAnim, IntroAnim, LayerAnim, LoopAnim, NetworkId, OutroAnim } from '../shared/anim';
+import { LEVELS, fitToLimit, optimizeAssets } from '../core/optimize';
+import type { BannerSettings, Easing, HoverAnim, IntroAnim, LayerAnim, LoopAnim, NetworkId, OutroAnim, Preset, PresetScope } from '../shared/anim';
 import {
   EASINGS,
   HOVER_PRESETS,
@@ -33,7 +34,11 @@ import {
   loopAmountLabel,
   outroAmountLabel,
 } from './labels';
+import { canvasCodec } from './codec';
+import { CustomEditor } from './keyframes';
 import { download, previewHtml, slug, zipFiles } from './package';
+import { Presets } from './presets';
+import { Timeline } from './timeline';
 
 function send(message: UiMessage): void {
   parent.postMessage({ pluginMessage: message }, '*');
@@ -65,6 +70,7 @@ function App() {
   const [notes, setNotes] = useState<string[]>([]);
   const [replay, setReplay] = useState(0);
   const [clipboard, setClipboard] = useState<LayerAnim | null>(null);
+  const [presets, setPresets] = useState<Record<PresetScope, Preset[]>>({ file: [], mine: [] });
 
   const frameRef = useRef<FrameInfo | null>(null);
   frameRef.current = frame;
@@ -114,6 +120,8 @@ function App() {
         const waiter = pending.current.get(key);
         pending.current.delete(key);
         waiter?.resolve({ banner: msg.banner, warnings: msg.warnings, anims: msg.anims, backup: msg.backup });
+      } else if (msg.type === 'presets') {
+        setPresets({ file: msg.file, mine: msg.mine });
       } else if (msg.type === 'error') {
         // Errors are not tied to a request, so every waiting request fails with it.
         for (const waiter of pending.current.values()) waiter.reject(new Error(msg.message));
@@ -155,9 +163,8 @@ function App() {
     }
   }
 
-  function pasteAnim() {
-    if (!clipboard) return;
-    for (const id of selectedIds) updateAnim(id, structuredCloneAnim(clipboard));
+  function applyToSelected(anim: LayerAnim) {
+    for (const id of selectedIds) updateAnim(id, structuredCloneAnim(anim));
   }
 
   /** Exports every selected banner frame with the current frame's network, link and backup settings. */
@@ -166,6 +173,8 @@ function App() {
     const net = NETWORKS[settings.network];
     const items: BundleItem[] = [];
     const notesOut: string[] = [];
+    const codec = canvasCodec();
+    const maxBytes = net.maxKb === null ? null : net.maxKb * 1024;
     try {
       const bases = uniqueBases(frames.map((f) => `${slug(f.name)}_${f.width}x${f.height}`));
       for (const [i, f] of frames.entries()) {
@@ -173,8 +182,15 @@ function App() {
         const r = await requestBuild(f.id, 'export', settings.backup);
         // The edited frame uses the panel's state; other frames use what is stored on their layers.
         const frameAnims = f.id === frame?.id ? anims : r.anims;
-        const gen = generate(r.banner, { clickTag: settings.clickTag, anims: frameAnims, maxDuration: net.maxDuration, platform: net.platform });
-        const zip = await zipFiles(gen.files);
+        const options = { clickTag: settings.clickTag, anims: frameAnims, maxDuration: net.maxDuration, platform: net.platform };
+        // Without auto-optimisation only the lossless first level runs.
+        const fitted = await fitToLimit(maxBytes, settings.optimize ? LEVELS.length : 1, async (level) => {
+          const assets = await optimizeAssets(r.banner.assets, LEVELS[level], codec);
+          const gen = generate({ ...r.banner, assets }, options);
+          const zip = await zipFiles(gen.files);
+          return { bytes: zip.length, result: { gen, zip } };
+        });
+        const { gen, zip } = fitted.result;
         const problems = validate(net, { width: r.banner.width, height: r.banner.height, zipBytes: zip.length, fileCount: gen.files.length });
         items.push({
           base: bases[i],
@@ -188,6 +204,9 @@ function App() {
           problems,
         });
         const prefix = frames.length > 1 ? `${f.name}: ` : '';
+        if (fitted.level > 0) {
+          notesOut.push(`${prefix}Картинки стиснуто (${LEVELS[fitted.level].label}), щоб вміститися в ${net.maxKb} KB.`);
+        }
         notesOut.push(...[...problems, ...gen.warnings, ...r.warnings].map((n) => prefix + n));
       }
 
@@ -244,6 +263,8 @@ function App() {
         {network.maxDuration !== null ? ` (ліміт ${network.maxDuration} с)` : ''}
       </p>
 
+      <Timeline layers={layers} maxDuration={network.maxDuration} selectedIds={selectedIds} replay={replay} onChange={updateAnim} />
+
       <section>
         <h2>Шари</h2>
         <LayerList layers={layers} selectedIds={selectedIds} ids={built?.ids ?? null} />
@@ -260,11 +281,20 @@ function App() {
           canPaste={!!clipboard}
           onChange={(anim) => updateAnim(selected.id, anim)}
           onCopy={() => setClipboard(selected.anim ? structuredCloneAnim(selected.anim) : null)}
-          onPaste={pasteAnim}
+          onPaste={() => clipboard && applyToSelected(clipboard)}
         />
       ) : (
         <p class="muted">Виберіть шар у списку або на полотні, щоб додати анімацію.</p>
       )}
+
+      <Presets
+        presets={presets}
+        current={selected?.anim ?? null}
+        selectedCount={selectedIds.length}
+        onApply={applyToSelected}
+        send={send}
+        onStatus={(text, error) => setStatus({ text, error })}
+      />
 
       <section>
         <h2>Експорт</h2>
@@ -284,6 +314,10 @@ function App() {
         <label class="check">
           <input type="checkbox" checked={settings.backup} onChange={(e) => updateSettings({ backup: e.currentTarget.checked })} />
           Додати backup JPG
+        </label>
+        <label class="check">
+          <input type="checkbox" checked={settings.optimize} onChange={(e) => updateSettings({ optimize: e.currentTarget.checked })} />
+          Стискати картинки, якщо ZIP не вміщується в ліміт
         </label>
         {frames.length > 1 && (
           <p class="muted small">
@@ -359,6 +393,7 @@ function LayerList(props: { layers: LayerInfo[]; selectedIds: string[]; ids: Set
             {layer.anim?.loop && <span class="badge">цикл</span>}
             {layer.anim?.hover && <span class="badge">hover</span>}
             {layer.anim?.outro && <span class="badge">зникнення</span>}
+            {layer.anim?.custom && <span class="badge">кадри</span>}
             {lost && <span class="badge warn">растр</span>}
           </li>
         );
@@ -529,6 +564,8 @@ function LayerEditor(props: {
           </div>
         )}
       </fieldset>
+
+      <CustomEditor value={anim.custom} onChange={(custom) => set({ custom })} />
     </section>
   );
 }

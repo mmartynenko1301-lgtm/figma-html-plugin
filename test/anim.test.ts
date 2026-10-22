@@ -3,7 +3,7 @@ import { DEFAULT_SETTINGS, defaultIntro, defaultLoop, parseAnim, parseSettings }
 
 describe('parseAnim', () => {
   it('round-trips stored settings', () => {
-    const anim = { v: 1 as const, intro: defaultIntro('slideUp'), loop: defaultLoop('pulse'), hover: null, outro: null };
+    const anim = { v: 1 as const, intro: defaultIntro('slideUp'), loop: defaultLoop('pulse'), hover: null, outro: null, custom: null };
     expect(parseAnim(JSON.stringify(anim))).toEqual(anim);
   });
 

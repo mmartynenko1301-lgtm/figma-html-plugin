@@ -1,9 +1,9 @@
-import type { Easing, HoverAnim, IntroAnim, LayerAnim, LoopAnim, OutroAnim } from '../shared/anim';
+import type { CustomAnim, Easing, HoverAnim, IntroAnim, Keyframe, LayerAnim, LoopAnim, OutroAnim } from '../shared/anim';
 import { introEnd, isSplitPreset } from '../shared/anim';
 
 // Each animated layer becomes nested wrappers, so outro, intro, loop and hover
 // transforms never overwrite each other or the layer's own placement:
-//   .nX (placement) > .nX-o (outro) > .nX-i (intro) > .nX-l (loop) > .nX-h (hover) > layer content
+//   .nX (placement) > .nX-o (outro) > .nX-i (intro) > .nX-c (custom keyframes) > .nX-l (loop) > .nX-h (hover) > layer content
 // Split-text intros animate the words or letters inside the text instead of a wrapper.
 
 const EASING_CSS: Record<Easing, string> = {
@@ -58,6 +58,18 @@ export function wrapAnimated(cls: string, name: string, anim: LayerAnim, opts: W
     opens.push(`${cls}-i`);
     css.push(...introCss(`${cls}-i`, intro));
   }
+  if (anim.custom) {
+    const iterations = customIterations(anim.custom, opts.maxDuration);
+    if (iterations === 0) {
+      warnings.push(`Власна анімація «${name}» не вміщується в ліміт ${opts.maxDuration} с і пропущена.`);
+    } else {
+      if (anim.custom.repeat > 0 && iterations !== anim.custom.repeat) {
+        warnings.push(`Власну анімацію «${name}» скорочено до ${iterations} повторів, щоб вміститися в ліміт ${opts.maxDuration} с.`);
+      }
+      opens.push(`${cls}-c`);
+      css.push(...customCss(`${cls}-c`, anim.custom, iterations));
+    }
+  }
   if (anim.loop) {
     const start = introEnd({ ...anim, intro }, opts.pieces) + anim.loop.delay;
     const iterations = loopIterations(anim.loop, start, opts.maxDuration);
@@ -110,12 +122,25 @@ export function loopIterations(loop: LoopAnim, start: number, maxDuration: numbe
   return Math.max(0, Math.floor((maxDuration - start - loop.duration) / cycle) + 1);
 }
 
+/** Cycles of a custom animation: its repeat count, cut to what fits the limit; repeat 0 fills the limit. */
+export function customIterations(custom: CustomAnim, maxDuration: number | null): number | 'infinite' {
+  if (maxDuration === null) return custom.repeat === 0 ? 'infinite' : custom.repeat;
+  if (custom.duration <= 0) return 0;
+  const fit = Math.max(0, Math.floor((maxDuration - custom.delay) / custom.duration + 1e-9));
+  return custom.repeat === 0 ? fit : Math.min(custom.repeat, fit);
+}
+
 /** When the last motion ends, in seconds, for the time-limit summary in the UI. */
 export function animationLength(anims: LayerAnim[], maxDuration: number | null): number | 'infinite' {
   let end = 0;
   for (const anim of anims) {
     end = Math.max(end, introEnd(anim));
     if (anim.outro) end = Math.max(end, anim.outro.at + anim.outro.duration);
+    if (anim.custom) {
+      const n = customIterations(anim.custom, maxDuration);
+      if (n === 'infinite') return 'infinite';
+      end = Math.max(end, anim.custom.delay + n * anim.custom.duration);
+    }
     if (anim.loop) {
       const start = introEnd(anim) + anim.loop.delay;
       const n = loopIterations(anim.loop, start, maxDuration);
@@ -160,6 +185,22 @@ function outroCss(cls: string, outro: OutroAnim): string[] {
     `@keyframes ${cls}{to{${to}}}`,
     `#banner.play .${cls}{animation:${cls} ${n(outro.duration)}s ${EASING_CSS[outro.easing]} ${n(outro.at)}s forwards}`,
   ];
+}
+
+function customCss(cls: string, custom: CustomAnim, iterations: number | 'infinite'): string[] {
+  const frames = [...custom.keyframes].sort((a, b) => a.at - b.at).map((k) => `${n(k.at)}%{${keyframeRules(k)}}`).join('');
+  return [
+    `@keyframes ${cls}{${frames}}`,
+    `#banner.play .${cls}{animation:${cls} ${n(custom.duration)}s ${EASING_CSS[custom.easing]} ${n(custom.delay)}s ${iterations} both}`,
+  ];
+}
+
+function keyframeRules(k: Keyframe): string {
+  const parts: string[] = [];
+  if (k.x !== 0 || k.y !== 0) parts.push(`translate(${n(k.x)}px,${n(k.y)}px)`);
+  if (k.rotate !== 0) parts.push(`rotate(${n(k.rotate)}deg)`);
+  if (k.scale !== 1) parts.push(`scale(${n(k.scale)})`);
+  return `transform:${parts.length ? parts.join(' ') : 'none'};opacity:${n(k.opacity)}`;
 }
 
 function loopCss(cls: string, loop: LoopAnim, start: number, iterations: number | 'infinite', radius: string | null): string[] {

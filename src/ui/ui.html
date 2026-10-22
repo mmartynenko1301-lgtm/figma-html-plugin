@@ -40,6 +40,30 @@
   legend { font-weight: 600; padding: 0 4px; }
   .grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
   input:not([type=checkbox]), select { width: 100%; }
+  button.fit { flex: none; }
+  .link-file { color: var(--brand); font-weight: 500; cursor: pointer; display: inline; }
+  .link-file input { display: none; }
+  .keyframes { width: 100%; border-collapse: collapse; table-layout: fixed; }
+  .keyframes th { font-weight: 500; color: var(--muted); text-align: left; font-size: 10px; padding: 0 2px 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .keyframes th:last-child, .keyframes td:last-child { width: 18px; }
+  .keyframes td { padding: 1px; }
+  .keyframes input { padding: 3px; font-size: 11px; }
+  .timeline { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; display: flex; flex-direction: column; gap: 3px; }
+  .tl-row { display: flex; align-items: center; gap: 6px; min-height: 13px; }
+  .tl-row.selected .tl-name { color: var(--brand); font-weight: 600; }
+  .tl-name { width: 80px; flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+  .tl-track { position: relative; flex: 1; height: 100%; background: var(--bg2); border-radius: 3px; }
+  .tl-axis .tl-track { background: none; }
+  .tl-tick { position: absolute; top: 0; transform: translateX(-50%); font-size: 9px; color: var(--muted); }
+  .tl-tick:first-child { transform: none; }
+  .tl-limit { position: absolute; top: 0; bottom: 0; border-left: 1px dashed var(--danger); }
+  .tl-bar { position: absolute; border-radius: 2px; cursor: ew-resize; touch-action: none; }
+  .tl-bar.intro { background: #0d99ff; }
+  .tl-bar.custom { background: #9747ff; }
+  .tl-bar.loop { background: #14ae5c; }
+  .tl-bar.outro { background: #f24822; }
+  .tl-playhead { position: absolute; top: 0; bottom: 0; left: 0; border-left: 1px solid var(--text); pointer-events: none; animation: tl-play linear forwards; }
+  @keyframes tl-play { from { left: 0; } to { left: 100%; } }
 </style>
 </head>
 <body>

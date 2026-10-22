@@ -67,12 +67,35 @@ export interface OutroAnim {
   amount: number;
 }
 
+/** One step of a custom animation; values are offsets from the layer as drawn. */
+export interface Keyframe {
+  /** Percent of the cycle, 0..100. */
+  at: number;
+  x: number; // px
+  y: number; // px
+  scale: number;
+  rotate: number; // degrees
+  opacity: number; // 0..1
+}
+
+export interface CustomAnim {
+  /** Seconds from banner start. */
+  delay: number;
+  /** Seconds per cycle. */
+  duration: number;
+  easing: Easing;
+  /** Number of cycles; 0 repeats until the network time limit. */
+  repeat: number;
+  keyframes: Keyframe[];
+}
+
 export interface LayerAnim {
   v: 1;
   intro: IntroAnim | null;
   loop: LoopAnim | null;
   hover: HoverAnim | null;
   outro: OutroAnim | null;
+  custom: CustomAnim | null;
 }
 
 export type NetworkId = 'google-ads' | 'google-dv' | 'adform' | 'admixer' | 'iab' | 'none';
@@ -82,9 +105,11 @@ export interface BannerSettings {
   clickTag: string;
   network: NetworkId;
   backup: boolean;
+  /** Shrink images on export until the ZIP fits the network's size limit. */
+  optimize: boolean;
 }
 
-export const DEFAULT_SETTINGS: BannerSettings = { v: 1, clickTag: 'https://example.com', network: 'google-ads', backup: true };
+export const DEFAULT_SETTINGS: BannerSettings = { v: 1, clickTag: 'https://example.com', network: 'google-ads', backup: true, optimize: true };
 
 export function defaultIntro(preset: IntroPreset): IntroAnim {
   const amount = preset === 'scaleIn' ? 0.6 : preset === 'zoomOut' ? 1.4 : preset === 'wordsUp' ? 16 : 24;
@@ -112,12 +137,26 @@ export function defaultOutro(preset: OutroPreset): OutroAnim {
   return { preset, at: 5, duration: 0.5, easing: 'easeIn', amount: preset === 'zoomAway' ? 0.6 : 24 };
 }
 
+export function defaultKeyframe(at: number): Keyframe {
+  return { at, x: 0, y: 0, scale: 1, rotate: 0, opacity: 1 };
+}
+
+export function defaultCustom(): CustomAnim {
+  return {
+    delay: 0,
+    duration: 1,
+    easing: 'easeInOut',
+    repeat: 1,
+    keyframes: [{ ...defaultKeyframe(0), y: 20, opacity: 0 }, { ...defaultKeyframe(60), y: -4 }, defaultKeyframe(100)],
+  };
+}
+
 export function emptyAnim(): LayerAnim {
-  return { v: 1, intro: null, loop: null, hover: null, outro: null };
+  return { v: 1, intro: null, loop: null, hover: null, outro: null, custom: null };
 }
 
 export function isEmptyAnim(anim: LayerAnim | null | undefined): boolean {
-  return !anim || (!anim.intro && !anim.loop && !anim.hover && !anim.outro);
+  return !anim || (!anim.intro && !anim.loop && !anim.hover && !anim.outro && !anim.custom);
 }
 
 /** Reads stored JSON defensively: unknown presets or broken data are dropped, not thrown. */
@@ -133,12 +172,42 @@ export function parseAnim(json: string): LayerAnim | null {
     hover: isPreset(raw.hover, HOVER_PRESETS)
       ? { ...defaultHover(raw.hover.preset), ...pickNumbers(raw.hover, ['duration', 'amount']), trigger: raw.hover.trigger === 'layer' ? 'layer' : 'banner' }
       : null,
-    // Added after v1 shipped; older data simply has no outro.
+    // Outro and custom were added after v1 shipped; older data simply has none.
     outro: isPreset(raw.outro, OUTRO_PRESETS)
       ? { ...defaultOutro(raw.outro.preset), ...pickNumbers(raw.outro, ['at', 'duration', 'amount']), easing: pickEasing(raw.outro, 'easeIn') }
       : null,
+    custom: parseCustom(raw.custom),
   };
   return isEmptyAnim(anim) ? null : anim;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function parseCustom(raw: any): CustomAnim | null {
+  if (!raw || typeof raw !== 'object' || !Array.isArray(raw.keyframes)) return null;
+  const keyframes: Keyframe[] = [];
+  for (const k of raw.keyframes) {
+    if (!k || typeof k !== 'object') continue;
+    const num = (key: keyof Keyframe, min: number, max: number) => {
+      const v = k[key];
+      return typeof v === 'number' && Number.isFinite(v) ? Math.min(max, Math.max(min, v)) : defaultKeyframe(0)[key];
+    };
+    keyframes.push({
+      at: num('at', 0, 100),
+      x: num('x', -10000, 10000),
+      y: num('y', -10000, 10000),
+      scale: num('scale', 0, 100),
+      rotate: num('rotate', -3600, 3600),
+      opacity: num('opacity', 0, 1),
+    });
+  }
+  if (keyframes.length === 0) return null;
+  const base = defaultCustom();
+  return {
+    ...base,
+    ...pickNumbers(raw, ['delay', 'duration', 'repeat']),
+    easing: pickEasing(raw, base.easing),
+    keyframes: keyframes.sort((a, b) => a.at - b.at),
+  };
 }
 
 export function parseSettings(json: string): BannerSettings {
@@ -150,7 +219,33 @@ export function parseSettings(json: string): BannerSettings {
     clickTag: typeof raw.clickTag === 'string' ? raw.clickTag : DEFAULT_SETTINGS.clickTag,
     network: networks.includes(raw.network) ? raw.network : DEFAULT_SETTINGS.network,
     backup: typeof raw.backup === 'boolean' ? raw.backup : DEFAULT_SETTINGS.backup,
+    optimize: typeof raw.optimize === 'boolean' ? raw.optimize : DEFAULT_SETTINGS.optimize,
   };
+}
+
+/** A named animation the team can apply to any layer. */
+export interface Preset {
+  id: string;
+  name: string;
+  anim: LayerAnim;
+}
+
+/** Where a preset lives: in the Figma file (shared with everyone in it) or on this computer. */
+export type PresetScope = 'file' | 'mine';
+
+/** Reads a stored or imported preset list; broken entries are dropped. */
+export function parsePresets(json: string): Preset[] {
+  const raw = parseJson(json);
+  const list = Array.isArray(raw) ? raw : Array.isArray(raw?.presets) ? raw.presets : [];
+  const out: Preset[] = [];
+  for (const item of list) {
+    if (!item || typeof item.name !== 'string' || !item.name.trim()) continue;
+    const anim = parseAnim(JSON.stringify(item.anim));
+    if (!anim) continue;
+    const id = typeof item.id === 'string' && item.id ? item.id : `p${Date.now().toString(36)}${out.length}`;
+    out.push({ id, name: item.name.trim().slice(0, 60), anim });
+  }
+  return out;
 }
 
 /**

@@ -1,4 +1,4 @@
-import type { BannerSettings, LayerAnim } from './anim';
+import type { BannerSettings, LayerAnim, Preset, PresetScope } from './anim';
 import type { Banner } from './ir';
 
 export interface FrameInfo {
@@ -38,6 +38,7 @@ export type MainMessage =
       anims: Record<string, LayerAnim>;
       backup: Uint8Array | null;
     }
+  | { type: 'presets'; file: Preset[]; mine: Preset[] }
   | { type: 'error'; message: string };
 
 export type BuildPurpose = 'preview' | 'export';
@@ -48,4 +49,7 @@ export type UiMessage =
   | { type: 'set-anim'; nodeId: string; anim: LayerAnim | null }
   | { type: 'set-settings'; frameId: string; settings: BannerSettings }
   | { type: 'select-layer'; nodeId: string }
+  /** Adds presets to a scope; a preset with an existing id or name replaces it. */
+  | { type: 'save-presets'; scope: PresetScope; presets: Preset[] }
+  | { type: 'delete-preset'; scope: PresetScope; id: string }
   | { type: 'close' };
