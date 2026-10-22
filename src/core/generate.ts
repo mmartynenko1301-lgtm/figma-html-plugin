@@ -1,8 +1,9 @@
 import type { Asset, Banner, BannerNode, BoxNode, ImageNode, Matrix, RGBA, Shadow, TextNode, TextSegment } from '../shared/ir';
-import type { LayerAnim } from '../shared/anim';
-import { isEmptyAnim } from '../shared/anim';
-import { wrapAnimated } from './animate';
+import type { IntroAnim, LayerAnim } from '../shared/anim';
+import { isEmptyAnim, isSplitPreset } from '../shared/anim';
+import { effectiveIntro, pieceDelay, splitCss, wrapAnimated } from './animate';
 import { isTranslation } from './matrix';
+import type { Platform } from './networks';
 
 export interface GenerateOptions {
   clickTag: string;
@@ -10,6 +11,8 @@ export interface GenerateOptions {
   anims?: Record<string, LayerAnim>;
   /** Network time limit in seconds; loops are cut to fit. Null or absent = no limit. */
   maxDuration?: number | null;
+  /** Packaging and click handling for the target network. Default: standard index.html + clickTag. */
+  platform?: Platform;
 }
 
 export interface OutputFile {
@@ -18,6 +21,7 @@ export interface OutputFile {
 }
 
 export interface GenerateResult {
+  /** A complete HTML document for previewing (for Admixer, body.html wrapped in a page). */
   html: string;
   files: OutputFile[];
   warnings: string[];
@@ -36,9 +40,22 @@ export function generate(banner: Banner, options: GenerateOptions): GenerateResu
   };
 
   const body = renderBox(banner.root, ctx, true);
-  const html = page(banner, options, ctx, body);
+  const platform = options.platform ?? 'standard';
+  const parts = pageParts(banner, options, ctx, body, platform);
 
-  const files: OutputFile[] = [{ path: 'index.html', data: html }];
+  let html: string;
+  const files: OutputFile[] = [];
+  if (platform === 'admixer') {
+    // Admixer injects body.html into its own page, so the file holds only body content.
+    const fragment = [...parts.head, ...parts.body].join('\n') + '\n';
+    files.push({ path: 'body.html', data: fragment });
+    html = documentOf(banner, [], [fragment]);
+  } else {
+    html = documentOf(banner, parts.head, parts.body);
+    files.push({ path: 'index.html', data: html });
+  }
+  if (platform === 'adform') files.push({ path: 'manifest.json', data: adformManifest(banner, options.clickTag) });
+
   const written = new Set<string>();
   for (const asset of banner.assets) {
     const path = assetPaths.get(asset.id)!;
@@ -60,17 +77,12 @@ interface Ctx {
   warnings: string[];
 }
 
-function page(banner: Banner, options: GenerateOptions, ctx: Ctx, body: string): string {
+function pageParts(banner: Banner, options: GenerateOptions, ctx: Ctx, body: string, platform: Platform): { head: string[]; body: string[] } {
   const { width: w, height: h } = banner;
   const fontsLink = googleFontsUrl(ctx.fonts);
-  return [
-    '<!DOCTYPE html>',
-    '<html lang="en">',
-    '<head>',
-    '<meta charset="utf-8">',
-    `<meta name="ad.size" content="width=${w},height=${h}">`,
-    `<title>${escapeHtml(banner.name)}</title>`,
+  const head = [
     fontsLink ? `<link rel="stylesheet" href="${escapeHtml(fontsLink)}">` : '',
+    platform === 'adform' ? `<script>${ADFORM_DHTML}</script>` : '',
     '<style>',
     '*{margin:0;padding:0;box-sizing:border-box}',
     `html,body{width:${w}px;height:${h}px;overflow:hidden}`,
@@ -80,28 +92,73 @@ function page(banner: Banner, options: GenerateOptions, ctx: Ctx, body: string):
     ':where(#banner div,#banner img){position:absolute;left:0;top:0;transform-origin:0 0}',
     ':where(#banner img){display:block}',
     ...ctx.css,
-    '@media (prefers-reduced-motion:reduce){#banner *{animation:none!important;transition:none!important}}',
+    '@media (prefers-reduced-motion:reduce){#banner *,#banner *::after{animation:none!important;transition:none!important}}',
     '</style>',
     `<script>var clickTag = ${JSON.stringify(options.clickTag).replace(/</g, '\\u003c')};</script>`,
+  ].filter((line) => line !== '');
+  return { head, body: [body, `<script>${runtime(platform, w, h)}</script>`] };
+}
+
+function documentOf(banner: Banner, head: string[], body: string[]): string {
+  const { width: w, height: h } = banner;
+  return [
+    '<!DOCTYPE html>',
+    '<html lang="en">',
+    '<head>',
+    '<meta charset="utf-8">',
+    `<meta name="ad.size" content="width=${w},height=${h}">`,
+    `<title>${escapeHtml(banner.name)}</title>`,
+    ...head,
     '</head>',
     '<body>',
-    body,
-    `<script>${RUNTIME}</script>`,
+    ...body,
     '</body>',
     '</html>',
     '',
-  ]
-    .filter((line) => line !== '')
-    .join('\n');
+  ].join('\n');
 }
 
-// Starts animations once images and fonts are ready, so nothing pops in mid-animation.
-const RUNTIME = [
-  'var b=document.getElementById("banner");',
-  'b.addEventListener("click",function(){window.open(window.clickTag,"_blank")});',
-  'function play(){b.classList.add("play")}',
-  'window.addEventListener("load",function(){document.fonts?document.fonts.ready.then(play,play):play()});',
-].join('');
+// Loads Adform's DHTML library, which provides dhtml.getVar for clickTAG.
+// https://support.adform.com/documentation/coty-manuals-old/building-banners-for-use-in-adform/adding-clicktag-s-to-banners
+const ADFORM_DHTML =
+  "document.write('<script src=\"'+(window.API_URL||'https://s1.adform.net/banners/scripts/rmb/Adform.DHTML.js?bv='+Math.random())+'\"><\\/script>');";
+
+function adformManifest(banner: Banner, clickTag: string): string {
+  const manifest = {
+    version: '1.0',
+    title: banner.name,
+    description: '',
+    width: String(Math.round(banner.width)),
+    height: String(Math.round(banner.height)),
+    events: { enabled: 1, list: {} },
+    clicktags: { clickTAG: clickTag },
+    source: 'index.html',
+  };
+  return JSON.stringify(manifest, null, 2) + '\n';
+}
+
+// Starts animations once images and fonts are ready, so nothing pops in mid-animation,
+// and sends clicks the way each network expects. Falls back to clickTag when the
+// network's library is absent (local preview).
+function runtime(platform: Platform, w: number, h: number): string {
+  const click = {
+    standard: 'window.open(window.clickTag,"_blank")',
+    adform:
+      'var d=window.dhtml;window.open(d?d.getVar("clickTAG",window.clickTag):window.clickTag,d?d.getVar("landingPageTarget","_blank"):"_blank")',
+    admixer: 'var g=window.globalHTML5Api;g?g.click():window.open(window.clickTag,"_blank")',
+  }[platform];
+  const start =
+    platform === 'admixer'
+      ? `var g=window.globalHTML5Api;g?g.on("load",function(){g.init({resize:[{name:"state-1",width:"${w}px",height:"${h}px"}]});ready()}):window.addEventListener("load",ready);`
+      : 'window.addEventListener("load",ready);';
+  return [
+    'var b=document.getElementById("banner");',
+    `b.addEventListener("click",function(){${click}});`,
+    'function play(){b.classList.add("play")}',
+    'function ready(){document.fonts?document.fonts.ready.then(play,play):play()}',
+    start,
+  ].join('');
+}
 
 function renderNode(node: BannerNode, ctx: Ctx): string {
   const anim = ctx.anims[node.id];
@@ -110,10 +167,36 @@ function renderNode(node: BannerNode, ctx: Ctx): string {
   // Placement lives on an outer element so animation transforms stay independent of it.
   const cls = nextClass(ctx);
   ctx.css.push(`.${cls}{${placement(node, true).join(';')}}`);
-  const wrapped = wrapAnimated(cls, node.name, anim, ctx.maxDuration);
+
+  const intro = effectiveIntro(anim.intro, node.kind === 'text');
+  const split = node.kind === 'text' && intro && isSplitPreset(intro.preset) ? { intro, cls: `${cls}-w` } : null;
+  if (split) ctx.css.push(...splitCss(split.cls, split.intro));
+
+  const wrapped = wrapAnimated(cls, node.name, anim, {
+    maxDuration: ctx.maxDuration,
+    isText: node.kind === 'text',
+    pieces: split && node.kind === 'text' ? splitPieces(node, split.intro).length : 1,
+    radius: node.kind === 'box' ? radiusCss(node) : null,
+  });
   ctx.css.push(...wrapped.css);
   ctx.warnings.push(...wrapped.warnings);
-  return `<div class="${cls}">${wrapped.open}${renderPlain(node, ctx, false)}${wrapped.close}</div>`;
+  const inner = node.kind === 'text' ? renderText(node, ctx, false, split) : renderPlain(node, ctx, false);
+  return `<div class="${cls}">${wrapped.open}${inner}${wrapped.close}</div>`;
+}
+
+interface Split {
+  intro: IntroAnim;
+  cls: string;
+}
+
+/** Text of each segment cut into animated pieces (words or letters) and the whitespace between them. */
+function splitPieces(node: TextNode, intro: IntroAnim): { segment: number; text: string; animated: boolean }[] {
+  const out: { segment: number; text: string; animated: boolean }[] = [];
+  node.segments.forEach((seg, segment) => {
+    const tokens = intro.preset === 'wordsUp' ? seg.text.split(/(\s+)/) : Array.from(seg.text);
+    for (const text of tokens) if (text) out.push({ segment, text, animated: /\S/.test(text) });
+  });
+  return out.filter((p) => p.animated);
 }
 
 function renderPlain(node: BannerNode, ctx: Ctx, placed: boolean): string {
@@ -140,12 +223,8 @@ function renderBox(node: BoxNode, ctx: Ctx, isRoot: boolean, placed = true): str
     rules.push(`background:${layers.join(',')}`);
   }
 
-  if (node.radius === 'ellipse') {
-    rules.push('border-radius:50%');
-  } else if (node.radius.some((r) => r > 0)) {
-    const [tl, tr, br, bl] = node.radius;
-    rules.push(tl === tr && tr === br && br === bl ? `border-radius:${px(tl)}` : `border-radius:${[tl, tr, br, bl].map(px).join(' ')}`);
-  }
+  const radius = radiusCss(node);
+  if (radius) rules.push(`border-radius:${radius}`);
 
   const shadows = node.shadows.map(shadow);
   if (node.stroke) {
@@ -166,7 +245,7 @@ function renderBox(node: BoxNode, ctx: Ctx, isRoot: boolean, placed = true): str
   return `<div ${attrs} data-name="${escapeHtml(node.name)}">${children}</div>`;
 }
 
-function renderText(node: TextNode, ctx: Ctx, placed: boolean): string {
+function renderText(node: TextNode, ctx: Ctx, placed: boolean, split: Split | null = null): string {
   const cls = nextClass(ctx);
   const justify = { TOP: 'flex-start', CENTER: 'center', BOTTOM: 'flex-end' }[node.verticalAlign];
   const align = { LEFT: 'left', CENTER: 'center', RIGHT: 'right', JUSTIFIED: 'justify' }[node.align];
@@ -183,12 +262,21 @@ function renderText(node: TextNode, ctx: Ctx, placed: boolean): string {
     ].join(';')}}`,
   );
 
+  let piece = 0;
   const spans = node.segments
     .map((seg, i) => {
       const segCls = `${cls}s${i}`;
       ctx.css.push(`.${segCls}{${segmentRules(seg).join(';')}}`);
       addFont(ctx, seg);
-      return `<span class="${segCls}">${escapeHtml(seg.text)}</span>`;
+      if (!split) return `<span class="${segCls}">${escapeHtml(seg.text)}</span>`;
+      const tokens = split.intro.preset === 'wordsUp' ? seg.text.split(/(\s+)/) : Array.from(seg.text);
+      const inner = tokens
+        .filter((t) => t !== '')
+        .map((t) =>
+          /\S/.test(t) ? `<span class="${split.cls}" style="animation-delay:${pieceDelay(split.intro, piece++)}">${escapeHtml(t)}</span>` : escapeHtml(t),
+        )
+        .join('');
+      return `<span class="${segCls}">${inner}</span>`;
     })
     .join('');
   return `<div class="${cls}" data-name="${escapeHtml(node.name)}"><p>${spans}</p></div>`;
@@ -220,6 +308,13 @@ function renderImage(node: ImageNode, ctx: Ctx, placed: boolean): string {
 }
 
 /** Size, plus position when `placed` (an animated layer's position sits on its wrapper instead). */
+function radiusCss(node: BoxNode): string | null {
+  if (node.radius === 'ellipse') return '50%';
+  if (!node.radius.some((r) => r > 0)) return null;
+  const [tl, tr, br, bl] = node.radius;
+  return tl === tr && tr === br && br === bl ? px(tl) : [tl, tr, br, bl].map(px).join(' ');
+}
+
 function placement(node: BannerNode, placed: boolean): string[] {
   const rules = [`width:${px(node.width)}`, `height:${px(node.height)}`];
   if (!placed) return rules;

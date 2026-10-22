@@ -19,6 +19,9 @@
   button.link { background: none; color: var(--brand); padding: 0; text-align: left; font-weight: 500; }
   button:disabled { opacity: .4; cursor: default; }
   .row { display: flex; gap: 8px; }
+  .row.between { justify-content: space-between; align-items: baseline; }
+  .row.between h2 { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row.tight { gap: 10px; flex: none; }
   .muted { color: var(--muted); margin: 0; }
   .small { font-size: 11px; }
   .error { color: var(--danger); margin: 0; }

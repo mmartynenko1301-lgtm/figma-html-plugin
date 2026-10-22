@@ -48,8 +48,8 @@ describe('helpers', () => {
 describe('generate with animations', () => {
   const banner = sampleBanner();
   const anims = {
-    '0:2': { v: 1 as const, intro: defaultIntro('fadeIn'), loop: null, hover: null },
-    '0:3': { v: 1 as const, intro: null, loop: defaultLoop('pulse'), hover: defaultHover('grow') },
+    '0:2': { v: 1 as const, intro: defaultIntro('fadeIn'), loop: null, hover: null, outro: null },
+    '0:3': { v: 1 as const, intro: null, loop: defaultLoop('pulse'), hover: defaultHover('grow'), outro: null },
   };
   const { html, warnings } = generate(banner, { clickTag: 'https://example.com', anims, maxDuration: 30 });
 
@@ -65,5 +65,36 @@ describe('generate with animations', () => {
     expect(html).toContain('#banner.play{visibility:visible}');
     expect(html).toContain('prefers-reduced-motion:reduce');
     expect(html).toContain('b.classList.add("play")');
+  });
+});
+
+describe('network platforms', () => {
+  it('adds manifest.json and the DHTML click for Adform', () => {
+    const { files, html } = generate(sampleBanner(), { clickTag: 'https://example.com', platform: 'adform' });
+    const manifest = JSON.parse(files.find((f) => f.path === 'manifest.json')!.data as string);
+    expect(manifest).toMatchObject({ width: '300', height: '250', source: 'index.html', clicktags: { clickTAG: 'https://example.com' } });
+    expect(html).toContain('Adform.DHTML.js');
+    expect(html).toContain('d.getVar("clickTAG",window.clickTag)');
+  });
+
+  it('writes body.html without a page shell for Admixer', () => {
+    const { files, html } = generate(sampleBanner(), { clickTag: 'https://example.com', platform: 'admixer' });
+    expect(files.map((f) => f.path)).toContain('body.html');
+    expect(files.map((f) => f.path)).not.toContain('index.html');
+    const body = files.find((f) => f.path === 'body.html')!.data as string;
+    expect(body).not.toContain('<html');
+    expect(body).toContain('g.click()');
+    expect(body).toContain('g.init({resize:[{name:"state-1",width:"300px",height:"250px"}]})');
+    // the preview wraps the fragment in a page
+    expect(html.startsWith('<!DOCTYPE html>')).toBe(true);
+  });
+});
+
+describe('split text', () => {
+  it('wraps each word with a growing delay and keeps the spaces', () => {
+    const anims = { '0:2': { v: 1 as const, intro: { ...defaultIntro('wordsUp'), delay: 0.2, stagger: 0.1 }, loop: null, hover: null, outro: null } };
+    const { html } = generate(sampleBanner(), { clickTag: '', anims });
+    expect(html).toMatch(/<span class="(n\d+-w)" style="animation-delay:0\.2s">Spring<\/span> <\/span><span class="n\d+s1"><span class="\1" style="animation-delay:0\.3s">sale<\/span> <span class="\1" style="animation-delay:0\.4s">&lt;50%&gt;<\/span>/);
+    expect(html).toMatch(/\.n\d+-w\{display:inline-block;white-space:pre\}/);
   });
 });

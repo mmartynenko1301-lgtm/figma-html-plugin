@@ -1,30 +1,37 @@
 import { render } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { animationLength } from '../core/animate';
+import type { BundleItem } from '../core/bundle';
+import { bundleFiles, uniqueBases } from '../core/bundle';
 import { generate } from '../core/generate';
 import { NETWORKS, validate } from '../core/networks';
-import type { BannerSettings, Easing, HoverAnim, IntroAnim, LayerAnim, LoopAnim, NetworkId } from '../shared/anim';
+import type { BannerSettings, Easing, HoverAnim, IntroAnim, LayerAnim, LoopAnim, NetworkId, OutroAnim } from '../shared/anim';
 import {
   EASINGS,
   HOVER_PRESETS,
   INTRO_PRESETS,
   LOOP_PRESETS,
+  OUTRO_PRESETS,
   defaultHover,
   defaultIntro,
   defaultLoop,
+  defaultOutro,
   emptyAnim,
   isEmptyAnim,
+  isSplitPreset,
 } from '../shared/anim';
 import type { Banner, BannerNode } from '../shared/ir';
-import type { FrameInfo, LayerInfo, MainMessage, UiMessage } from '../shared/messages';
+import type { BuildPurpose, FrameInfo, LayerInfo, MainMessage, UiMessage } from '../shared/messages';
 import {
   EASING_LABELS,
   HOVER_LABELS,
   INTRO_LABELS,
   LOOP_LABELS,
+  OUTRO_LABELS,
   hoverAmountLabel,
   introAmountLabel,
   loopAmountLabel,
+  outroAmountLabel,
 } from './labels';
 import { download, previewHtml, slug, zipFiles } from './package';
 
@@ -32,29 +39,57 @@ function send(message: UiMessage): void {
   parent.postMessage({ pluginMessage: message }, '*');
 }
 
-interface Built {
-  frameId: string;
+interface BuildResult {
   banner: Banner;
   warnings: string[];
+  anims: Record<string, LayerAnim>;
+  backup: Uint8Array | null;
+}
+
+interface Built extends BuildResult {
   /** Layer ids present in the banner; layers merged into a raster image are missing. */
   ids: Set<string>;
 }
 
+type Pending = { resolve: (r: BuildResult) => void; reject: (e: Error) => void };
+
 function App() {
   const [frame, setFrame] = useState<FrameInfo | null>(null);
+  const [frames, setFrames] = useState<FrameInfo[]>([]);
   const [layers, setLayers] = useState<LayerInfo[]>([]);
   const [settings, setSettings] = useState<BannerSettings | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [built, setBuilt] = useState<Built | null>(null);
-  const [busy, setBusy] = useState<'preview' | 'export' | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
   const [status, setStatus] = useState<{ text: string; error?: boolean } | null>(null);
   const [notes, setNotes] = useState<string[]>([]);
   const [replay, setReplay] = useState(0);
+  const [clipboard, setClipboard] = useState<LayerAnim | null>(null);
 
   const frameRef = useRef<FrameInfo | null>(null);
   frameRef.current = frame;
-  const latest = useRef({ layers, settings });
-  latest.current = { layers, settings };
+  const pending = useRef(new Map<string, Pending>());
+
+  /** Asks the main thread to read a frame from Figma; one request per frame and purpose at a time. */
+  function requestBuild(frameId: string, purpose: BuildPurpose, backup = false): Promise<BuildResult> {
+    return new Promise((resolve, reject) => {
+      pending.current.set(`${frameId}|${purpose}`, { resolve, reject });
+      send({ type: 'build', frameId, purpose, backup });
+    });
+  }
+
+  async function refreshPreview(frameId: string) {
+    setBusy('Готую превʼю…');
+    try {
+      const r = await requestBuild(frameId, 'preview');
+      // Ignore a late answer for a frame the user has already left.
+      if (frameRef.current?.id === frameId) setBuilt({ ...r, ids: collectIds(r.banner.root) });
+    } catch (err) {
+      setStatus({ text: errorText(err), error: true });
+    } finally {
+      setBusy(null);
+    }
+  }
 
   useEffect(() => {
     window.onmessage = (event: MessageEvent) => {
@@ -62,26 +97,27 @@ function App() {
       if (!msg) return;
       if (msg.type === 'state') {
         const changedFrame = msg.frame?.id !== frameRef.current?.id;
+        frameRef.current = msg.frame;
         setFrame(msg.frame);
+        setFrames(msg.frames);
         setLayers(msg.layers);
         setSettings(msg.settings);
-        setSelectedId(msg.selectedLayerId);
+        setSelectedIds(msg.selectedLayerIds);
         if (changedFrame) {
           setBuilt(null);
           setNotes([]);
           setStatus(null);
-          if (msg.frame) {
-            setBusy('preview');
-            send({ type: 'build', frameId: msg.frame.id, purpose: 'preview' });
-          }
+          if (msg.frame) void refreshPreview(msg.frame.id);
         }
       } else if (msg.type === 'banner') {
-        const next: Built = { frameId: msg.banner.root.id, banner: msg.banner, warnings: msg.warnings, ids: collectIds(msg.banner.root) };
-        setBuilt(next);
-        if (msg.purpose === 'export') void finishExport(next, msg.backup);
-        else setBusy(null);
+        const key = `${msg.banner.root.id}|${msg.purpose}`;
+        const waiter = pending.current.get(key);
+        pending.current.delete(key);
+        waiter?.resolve({ banner: msg.banner, warnings: msg.warnings, anims: msg.anims, backup: msg.backup });
       } else if (msg.type === 'error') {
-        setBusy(null);
+        // Errors are not tied to a request, so every waiting request fails with it.
+        for (const waiter of pending.current.values()) waiter.reject(new Error(msg.message));
+        pending.current.clear();
         setStatus({ text: msg.message, error: true });
       }
     };
@@ -119,41 +155,56 @@ function App() {
     }
   }
 
-  function startExport() {
-    if (!frame) return;
-    setBusy('export');
-    setStatus({ text: 'Експортую…' });
-    send({ type: 'build', frameId: frame.id, purpose: 'export' });
+  function pasteAnim() {
+    if (!clipboard) return;
+    for (const id of selectedIds) updateAnim(id, structuredCloneAnim(clipboard));
   }
 
-  async function finishExport(b: Built, backup: Uint8Array | null) {
+  /** Exports every selected banner frame with the current frame's network, link and backup settings. */
+  async function exportAll() {
+    if (!settings || frames.length === 0) return;
+    const net = NETWORKS[settings.network];
+    const items: BundleItem[] = [];
+    const notesOut: string[] = [];
     try {
-      const { layers: currentLayers, settings: s } = latest.current;
-      const net = NETWORKS[s?.network ?? 'google-ads'];
-      const animMap: Record<string, LayerAnim> = {};
-      for (const layer of currentLayers) if (layer.anim) animMap[layer.id] = layer.anim;
-      const { files, warnings } = generate(b.banner, { clickTag: s?.clickTag ?? '', anims: animMap, maxDuration: net.maxDuration });
-      const zip = await zipFiles(files);
-      const base = `${slug(b.banner.name)}_${Math.round(b.banner.width)}x${Math.round(b.banner.height)}`;
-      const problems = validate(net, { width: b.banner.width, height: b.banner.height, zipBytes: zip.length, fileCount: files.length });
-
-      if (backup) {
-        // One download: the upload-ready banner ZIP next to its backup image.
-        const bundle = await zipFiles([
-          { path: `${base}.zip`, data: zip },
-          { path: `${base}_backup.jpg`, data: backup },
-        ]);
-        download(bundle, `${base}_export.zip`, 'application/zip');
-      } else {
-        download(zip, `${base}.zip`, 'application/zip');
+      const bases = uniqueBases(frames.map((f) => `${slug(f.name)}_${f.width}x${f.height}`));
+      for (const [i, f] of frames.entries()) {
+        setBusy(frames.length > 1 ? `Експортую ${i + 1} з ${frames.length}: ${f.name}` : 'Експортую…');
+        const r = await requestBuild(f.id, 'export', settings.backup);
+        // The edited frame uses the panel's state; other frames use what is stored on their layers.
+        const frameAnims = f.id === frame?.id ? anims : r.anims;
+        const gen = generate(r.banner, { clickTag: settings.clickTag, anims: frameAnims, maxDuration: net.maxDuration, platform: net.platform });
+        const zip = await zipFiles(gen.files);
+        const problems = validate(net, { width: r.banner.width, height: r.banner.height, zipBytes: zip.length, fileCount: gen.files.length });
+        items.push({
+          base: bases[i],
+          name: f.name,
+          width: r.banner.width,
+          height: r.banner.height,
+          zip,
+          previewHtml: gen.html,
+          assets: gen.files.filter((file) => file.path.startsWith('img/')),
+          backup: r.backup,
+          problems,
+        });
+        const prefix = frames.length > 1 ? `${f.name}: ` : '';
+        notesOut.push(...[...problems, ...gen.warnings, ...r.warnings].map((n) => prefix + n));
       }
-      setNotes([...problems, ...warnings, ...b.warnings]);
+
+      if (items.length === 1 && !items[0].backup) {
+        download(items[0].zip, `${items[0].base}.zip`, 'application/zip');
+      } else {
+        const title = items.length === 1 ? items[0].base : `banners_${items.length}`;
+        download(await zipFiles(bundleFiles(items, title)), `${title}_export.zip`, 'application/zip');
+      }
+      const totalKb = items.reduce((sum, item) => sum + item.zip.length, 0) / 1024;
+      setNotes(notesOut);
       setStatus({
-        text: `Готово: ${base}.zip, ${(zip.length / 1024).toFixed(1)} KB, файлів: ${files.length}.`,
-        error: problems.length > 0,
+        text: `Готово: банерів ${items.length}, ${totalKb.toFixed(1)} KB.`,
+        error: items.some((item) => item.problems.length > 0),
       });
     } catch (err) {
-      setStatus({ text: err instanceof Error ? err.message : String(err), error: true });
+      setStatus({ text: errorText(err), error: true });
     } finally {
       setBusy(null);
     }
@@ -163,12 +214,12 @@ function App() {
     return (
       <main>
         <h1>Banner Export</h1>
-        <p class="muted">Виділіть фрейм банера або будь-який шар у ньому.</p>
+        <p class="muted">Виділіть фрейм банера або будь-який шар у ньому. Для пакетного експорту виділіть кілька фреймів.</p>
       </main>
     );
   }
 
-  const selected = layers.find((l) => l.id === selectedId) ?? null;
+  const selected = layers.find((l) => l.id === selectedIds[0]) ?? null;
 
   return (
     <main>
@@ -179,19 +230,12 @@ function App() {
         </span>
       </header>
 
-      <Preview built={built} anims={anims} settings={settings} replay={replay} busy={busy === 'preview'} />
+      <Preview built={built} anims={anims} settings={settings} replay={replay} busy={busy} />
       <div class="row">
         <button class="secondary" onClick={() => setReplay((n) => n + 1)} disabled={!built}>
           ↻ Програти
         </button>
-        <button
-          class="secondary"
-          onClick={() => {
-            setBusy('preview');
-            send({ type: 'build', frameId: frame.id, purpose: 'preview' });
-          }}
-          disabled={!!busy}
-        >
+        <button class="secondary" onClick={() => void refreshPreview(frame.id)} disabled={!!busy}>
           Оновити з макета
         </button>
       </div>
@@ -202,14 +246,22 @@ function App() {
 
       <section>
         <h2>Шари</h2>
-        <LayerList layers={layers} selectedId={selectedId} ids={built?.ids ?? null} />
+        <LayerList layers={layers} selectedIds={selectedIds} ids={built?.ids ?? null} />
         <button class="link" onClick={staggerIntros} disabled={!layers.some((l) => l.anim?.intro)}>
           Розкласти появу по черзі (крок 0.25 с)
         </button>
       </section>
 
       {selected ? (
-        <LayerEditor key={selected.id} layer={selected} onChange={(anim) => updateAnim(selected.id, anim)} />
+        <LayerEditor
+          key={selected.id}
+          layer={selected}
+          selectedCount={selectedIds.length}
+          canPaste={!!clipboard}
+          onChange={(anim) => updateAnim(selected.id, anim)}
+          onCopy={() => setClipboard(selected.anim ? structuredCloneAnim(selected.anim) : null)}
+          onPaste={pasteAnim}
+        />
       ) : (
         <p class="muted">Виберіть шар у списку або на полотні, щоб додати анімацію.</p>
       )}
@@ -233,8 +285,13 @@ function App() {
           <input type="checkbox" checked={settings.backup} onChange={(e) => updateSettings({ backup: e.currentTarget.checked })} />
           Додати backup JPG
         </label>
-        <button onClick={startExport} disabled={!!busy}>
-          {busy === 'export' ? 'Експортую…' : 'Експортувати ZIP'}
+        {frames.length > 1 && (
+          <p class="muted small">
+            Виділено фреймів: {frames.length}. Мережа, посилання і backup беруться з поточного фрейму, анімації — з кожного фрейму свої.
+          </p>
+        )}
+        <button onClick={() => void exportAll()} disabled={!!busy}>
+          {busy && busy.startsWith('Експорт') ? busy : frames.length > 1 ? `Експортувати всі (${frames.length})` : 'Експортувати ZIP'}
         </button>
         {status && <p class={status.error ? 'error' : 'muted'}>{status.text}</p>}
         {notes.length > 0 && (
@@ -249,7 +306,7 @@ function App() {
   );
 }
 
-function Preview(props: { built: Built | null; anims: Record<string, LayerAnim>; settings: BannerSettings; replay: number; busy: boolean }) {
+function Preview(props: { built: Built | null; anims: Record<string, LayerAnim>; settings: BannerSettings; replay: number; busy: string | null }) {
   const { built, anims, settings, replay, busy } = props;
   const blobs = useRef<{ banner: Banner | null; urls: Map<string, string> }>({ banner: null, urls: new Map() });
   const [doc, setDoc] = useState('');
@@ -262,37 +319,29 @@ function Preview(props: { built: Built | null; anims: Record<string, LayerAnim>;
     }
     // Debounced so typing in a field does not restart the preview on every keystroke.
     const timer = setTimeout(() => {
-      const { html, files } = generate(built.banner, {
-        clickTag: settings.clickTag,
-        anims,
-        maxDuration: NETWORKS[settings.network].maxDuration,
-      });
+      const net = NETWORKS[settings.network];
+      const { html, files } = generate(built.banner, { clickTag: settings.clickTag, anims, maxDuration: net.maxDuration, platform: net.platform });
       // A comment that changes with each replay forces the iframe to reload.
       setDoc(previewHtml(html, files, blobs.current.urls) + `<!-- ${replay} -->`);
     }, 250);
     return () => clearTimeout(timer);
   }, [built, anims, settings, replay]);
 
-  if (!built) return <div class="preview empty muted">{busy ? 'Готую превʼю…' : 'Немає превʼю'}</div>;
+  if (!built) return <div class="preview empty muted">{busy ?? 'Немає превʼю'}</div>;
   const { width, height } = built.banner;
   const scale = Math.min(1, 352 / width, 320 / height);
   return (
     <div class="preview">
       {/* The box takes the scaled size, so a wide banner stays centred and fully visible. */}
       <div style={{ width: `${width * scale}px`, height: `${height * scale}px`, overflow: 'hidden' }}>
-        <iframe
-          srcDoc={doc}
-          width={width}
-          height={height}
-          style={{ transform: `scale(${scale})`, width: `${width}px`, height: `${height}px` }}
-        />
+        <iframe srcDoc={doc} width={width} height={height} style={{ transform: `scale(${scale})`, width: `${width}px`, height: `${height}px` }} />
       </div>
     </div>
   );
 }
 
-function LayerList(props: { layers: LayerInfo[]; selectedId: string | null; ids: Set<string> | null }) {
-  const { layers, selectedId, ids } = props;
+function LayerList(props: { layers: LayerInfo[]; selectedIds: string[]; ids: Set<string> | null }) {
+  const { layers, selectedIds, ids } = props;
   if (layers.length === 0) return <p class="muted">У фреймі немає шарів.</p>;
   return (
     <ul class="layers">
@@ -300,7 +349,7 @@ function LayerList(props: { layers: LayerInfo[]; selectedId: string | null; ids:
         const lost = !!layer.anim && !!ids && !ids.has(layer.id);
         return (
           <li
-            class={layer.id === selectedId ? 'selected' : ''}
+            class={selectedIds.includes(layer.id) ? 'selected' : ''}
             style={{ paddingLeft: `${8 + layer.depth * 14}px` }}
             onClick={() => send({ type: 'select-layer', nodeId: layer.id })}
             title={lost ? 'Шар увійшов у растрове зображення батьківського шару, тому його анімація не застосується' : layer.name}
@@ -309,6 +358,7 @@ function LayerList(props: { layers: LayerInfo[]; selectedId: string | null; ids:
             {layer.anim?.intro && <span class="badge">поява</span>}
             {layer.anim?.loop && <span class="badge">цикл</span>}
             {layer.anim?.hover && <span class="badge">hover</span>}
+            {layer.anim?.outro && <span class="badge">зникнення</span>}
             {lost && <span class="badge warn">растр</span>}
           </li>
         );
@@ -317,14 +367,35 @@ function LayerList(props: { layers: LayerInfo[]; selectedId: string | null; ids:
   );
 }
 
-function LayerEditor(props: { layer: LayerInfo; onChange: (anim: LayerAnim) => void }) {
+function LayerEditor(props: {
+  layer: LayerInfo;
+  selectedCount: number;
+  canPaste: boolean;
+  onChange: (anim: LayerAnim) => void;
+  onCopy: () => void;
+  onPaste: () => void;
+}) {
   const { layer, onChange } = props;
   const anim = layer.anim ?? emptyAnim();
   const set = (patch: Partial<LayerAnim>) => onChange({ ...anim, ...patch });
+  const isText = layer.type === 'TEXT';
 
   return (
     <section class="editor">
-      <h2>Анімація: {layer.name}</h2>
+      <div class="row between">
+        <h2>Анімація: {layer.name}</h2>
+        <div class="row tight">
+          <button class="link" onClick={props.onCopy} disabled={!layer.anim}>
+            Копіювати
+          </button>
+          <button class="link" onClick={props.onPaste} disabled={!props.canPaste}>
+            {props.selectedCount > 1 ? `Вставити (${props.selectedCount})` : 'Вставити'}
+          </button>
+          <button class="link" onClick={() => onChange(emptyAnim())} disabled={!layer.anim}>
+            Скинути
+          </button>
+        </div>
+      </div>
 
       <fieldset>
         <legend>Поява</legend>
@@ -336,7 +407,7 @@ function LayerEditor(props: { layer: LayerInfo; onChange: (anim: LayerAnim) => v
           }}
         >
           <option value="">Немає</option>
-          {INTRO_PRESETS.map((p) => (
+          {INTRO_PRESETS.filter((p) => isText || !isSplitPreset(p)).map((p) => (
             <option value={p}>{INTRO_LABELS[p]}</option>
           ))}
         </select>
@@ -344,20 +415,21 @@ function LayerEditor(props: { layer: LayerInfo; onChange: (anim: LayerAnim) => v
           <div class="grid">
             <NumberField label="Затримка, с" value={anim.intro.delay} step={0.1} onChange={(v) => set({ intro: { ...anim.intro!, delay: v } })} />
             <NumberField label="Тривалість, с" value={anim.intro.duration} step={0.1} min={0.05} onChange={(v) => set({ intro: { ...anim.intro!, duration: v } })} />
-            <label>
-              Easing
-              <select value={anim.intro.easing} onChange={(e) => set({ intro: { ...anim.intro!, easing: e.currentTarget.value as Easing } })}>
-                {EASINGS.map((ez) => (
-                  <option value={ez}>{EASING_LABELS[ez]}</option>
-                ))}
-              </select>
-            </label>
+            <EasingField value={anim.intro.easing} onChange={(easing) => set({ intro: { ...anim.intro!, easing } })} />
             {introAmountLabel(anim.intro.preset) && (
               <NumberField
                 label={introAmountLabel(anim.intro.preset)!}
                 value={anim.intro.amount}
                 step={anim.intro.preset === 'scaleIn' || anim.intro.preset === 'zoomOut' ? 0.05 : 2}
                 onChange={(v) => set({ intro: { ...anim.intro!, amount: v } })}
+              />
+            )}
+            {isSplitPreset(anim.intro.preset) && (
+              <NumberField
+                label={anim.intro.preset === 'wordsUp' ? 'Крок між словами, с' : 'Крок між літерами, с'}
+                value={anim.intro.stagger}
+                step={0.01}
+                onChange={(v) => set({ intro: { ...anim.intro!, stagger: v } })}
               />
             )}
           </div>
@@ -386,7 +458,7 @@ function LayerEditor(props: { layer: LayerInfo; onChange: (anim: LayerAnim) => v
             <NumberField
               label={loopAmountLabel(anim.loop.preset)}
               value={anim.loop.amount}
-              step={anim.loop.preset === 'pulse' ? 0.01 : 1}
+              step={anim.loop.preset === 'pulse' || anim.loop.preset === 'shine' ? 0.01 : 1}
               onChange={(v) => set({ loop: { ...anim.loop!, amount: v } })}
             />
           </div>
@@ -426,7 +498,51 @@ function LayerEditor(props: { layer: LayerInfo; onChange: (anim: LayerAnim) => v
           </div>
         )}
       </fieldset>
+
+      <fieldset>
+        <legend>Зникнення</legend>
+        <select
+          value={anim.outro?.preset ?? ''}
+          onChange={(e) => {
+            const v = e.currentTarget.value as OutroAnim['preset'] | '';
+            set({ outro: v ? { ...defaultOutro(v), at: anim.outro?.at ?? defaultOutro(v).at } : null });
+          }}
+        >
+          <option value="">Немає</option>
+          {OUTRO_PRESETS.map((p) => (
+            <option value={p}>{OUTRO_LABELS[p]}</option>
+          ))}
+        </select>
+        {anim.outro && (
+          <div class="grid">
+            <NumberField label="Коли, с від старту" value={anim.outro.at} step={0.1} onChange={(v) => set({ outro: { ...anim.outro!, at: v } })} />
+            <NumberField label="Тривалість, с" value={anim.outro.duration} step={0.1} min={0.05} onChange={(v) => set({ outro: { ...anim.outro!, duration: v } })} />
+            <EasingField value={anim.outro.easing} onChange={(easing) => set({ outro: { ...anim.outro!, easing } })} />
+            {outroAmountLabel(anim.outro.preset) && (
+              <NumberField
+                label={outroAmountLabel(anim.outro.preset)!}
+                value={anim.outro.amount}
+                step={anim.outro.preset === 'zoomAway' ? 0.05 : 2}
+                onChange={(v) => set({ outro: { ...anim.outro!, amount: v } })}
+              />
+            )}
+          </div>
+        )}
+      </fieldset>
     </section>
+  );
+}
+
+function EasingField(props: { value: Easing; onChange: (e: Easing) => void }) {
+  return (
+    <label>
+      Easing
+      <select value={props.value} onChange={(e) => props.onChange(e.currentTarget.value as Easing)}>
+        {EASINGS.map((ez) => (
+          <option value={ez}>{EASING_LABELS[ez]}</option>
+        ))}
+      </select>
+    </label>
   );
 }
 
@@ -452,6 +568,14 @@ function collectIds(node: BannerNode, out = new Set<string>()): Set<string> {
   out.add(node.id);
   if (node.kind === 'box') for (const child of node.children) collectIds(child, out);
   return out;
+}
+
+function structuredCloneAnim(anim: LayerAnim): LayerAnim {
+  return JSON.parse(JSON.stringify(anim)) as LayerAnim;
+}
+
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 function round(v: number): number {

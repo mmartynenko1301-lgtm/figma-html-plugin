@@ -1,6 +1,6 @@
 import type { BannerSettings, LayerAnim } from '../shared/anim';
 import { isEmptyAnim, parseAnim, parseSettings } from '../shared/anim';
-import type { FrameInfo, LayerInfo, MainMessage, UiMessage } from '../shared/messages';
+import type { BuildPurpose, FrameInfo, LayerInfo, MainMessage, UiMessage } from '../shared/messages';
 import { serializeBanner } from './serialize';
 
 type BannerFrame = FrameNode | ComponentNode | InstanceNode;
@@ -50,29 +50,36 @@ function frameInfo(frame: BannerFrame): FrameInfo {
 
 function sendState(): void {
   const selection = figma.currentPage.selection;
-  const frame = selection.length ? bannerFrameOf(selection[0]) : null;
+  const frames: BannerFrame[] = [];
+  for (const node of selection) {
+    const f = bannerFrameOf(node);
+    if (f && !frames.includes(f)) frames.push(f);
+  }
+  const frame = frames[0] ?? null;
   if (!frame) {
-    post({ type: 'state', frame: null, layers: [], settings: null, selectedLayerId: null });
+    post({ type: 'state', frame: null, frames: [], layers: [], settings: null, selectedLayerIds: [] });
     return;
   }
-  const selected = selection[0] !== frame ? selection[0].id : null;
+  const inFrame = selection.filter((n) => n !== frame && bannerFrameOf(n) === frame).map((n) => n.id);
   post({
     type: 'state',
     frame: frameInfo(frame),
+    frames: frames.map(frameInfo),
     layers: collectLayers(frame),
     settings: parseSettings(frame.getPluginData(SETTINGS_KEY)),
-    selectedLayerId: selected,
+    selectedLayerIds: inFrame,
   });
 }
 
-async function build(frameId: string, purpose: 'preview' | 'export'): Promise<void> {
+async function build(frameId: string, purpose: BuildPurpose, withBackup: boolean): Promise<void> {
   const node = await figma.getNodeByIdAsync(frameId);
   if (!isBannerFrame(node)) throw new Error('Фрейм не знайдено. Виділіть його ще раз.');
   const { banner, warnings } = await serializeBanner(node);
-  const settings = parseSettings(node.getPluginData(SETTINGS_KEY));
+  const anims: Record<string, LayerAnim> = {};
+  for (const layer of collectLayers(node)) if (layer.anim) anims[layer.id] = layer.anim;
   // The backup shows the design as drawn, which is the final state of every animation.
-  const backup = purpose === 'export' && settings.backup ? await node.exportAsync({ format: 'JPG', constraint: { type: 'SCALE', value: 1 } }) : null;
-  post({ type: 'banner', purpose, banner, warnings, backup });
+  const backup = purpose === 'export' && withBackup ? await node.exportAsync({ format: 'JPG', constraint: { type: 'SCALE', value: 1 } }) : null;
+  post({ type: 'banner', purpose, banner, warnings, anims, backup });
 }
 
 async function setAnim(nodeId: string, anim: LayerAnim | null): Promise<void> {
@@ -100,7 +107,7 @@ figma.ui.onmessage = async (msg: UiMessage) => {
   try {
     switch (msg.type) {
       case 'build':
-        await build(msg.frameId, msg.purpose);
+        await build(msg.frameId, msg.purpose, msg.backup);
         break;
       case 'set-anim':
         await setAnim(msg.nodeId, msg.anim);
