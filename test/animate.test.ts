@@ -30,7 +30,7 @@ const opts = (maxDuration: number | null) => ({ maxDuration, isText: false, piec
 
 describe('wrapAnimated', () => {
   it('nests intro, loop and hover wrappers in that order', () => {
-    const anim = { v: 1 as const, intro: defaultIntro('slideUp'), loop: defaultLoop('pulse'), hover: defaultHover('grow'), outro: null };
+    const anim = { v: 1 as const, intro: defaultIntro('slideUp'), loop: defaultLoop('pulse'), hover: defaultHover('grow'), outro: null, custom: null };
     const w = wrapAnimated('n5', 'CTA', anim, opts(30));
     expect(w.open).toBe('<div class="n5-i"><div class="n5-l"><div class="n5-h">');
     expect(w.close).toBe('</div></div></div>');

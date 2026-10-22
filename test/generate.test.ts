@@ -48,8 +48,8 @@ describe('helpers', () => {
 describe('generate with animations', () => {
   const banner = sampleBanner();
   const anims = {
-    '0:2': { v: 1 as const, intro: defaultIntro('fadeIn'), loop: null, hover: null, outro: null },
-    '0:3': { v: 1 as const, intro: null, loop: defaultLoop('pulse'), hover: defaultHover('grow'), outro: null },
+    '0:2': { v: 1 as const, intro: defaultIntro('fadeIn'), loop: null, hover: null, outro: null, custom: null },
+    '0:3': { v: 1 as const, intro: null, loop: defaultLoop('pulse'), hover: defaultHover('grow'), outro: null, custom: null },
   };
   const { html, warnings } = generate(banner, { clickTag: 'https://example.com', anims, maxDuration: 30 });
 
@@ -92,7 +92,7 @@ describe('network platforms', () => {
 
 describe('split text', () => {
   it('wraps each word with a growing delay and keeps the spaces', () => {
-    const anims = { '0:2': { v: 1 as const, intro: { ...defaultIntro('wordsUp'), delay: 0.2, stagger: 0.1 }, loop: null, hover: null, outro: null } };
+    const anims = { '0:2': { v: 1 as const, intro: { ...defaultIntro('wordsUp'), delay: 0.2, stagger: 0.1 }, loop: null, hover: null, outro: null, custom: null } };
     const { html } = generate(sampleBanner(), { clickTag: '', anims });
     expect(html).toMatch(/<span class="(n\d+-w)" style="animation-delay:0\.2s">Spring<\/span> <\/span><span class="n\d+s1"><span class="\1" style="animation-delay:0\.3s">sale<\/span> <span class="\1" style="animation-delay:0\.4s">&lt;50%&gt;<\/span>/);
     expect(html).toMatch(/\.n\d+-w\{display:inline-block;white-space:pre\}/);
