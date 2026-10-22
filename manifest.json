@@ -1,0 +1,13 @@
+{
+  "name": "Banner Export",
+  "id": "banner-export-dev",
+  "api": "1.0.0",
+  "main": "dist/code.js",
+  "ui": "dist/ui.html",
+  "editorType": ["figma"],
+  "documentAccess": "dynamic-page",
+  "networkAccess": {
+    "allowedDomains": ["https://fonts.googleapis.com", "https://fonts.gstatic.com"],
+    "reasoning": "Preview loads Google Fonts used in the banner"
+  }
+}

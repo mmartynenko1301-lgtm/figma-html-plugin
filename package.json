@@ -1,0 +1,21 @@
+{
+  "name": "figma-banner-export",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Figma plugin: export banner frames to HTML5 ZIP with CSS animations",
+  "scripts": {
+    "build": "node build.mjs",
+    "watch": "node build.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "jszip": "3.10.2"
+  },
+  "devDependencies": {
+    "@figma/plugin-typings": "1.142.0",
+    "esbuild": "0.28.2",
+    "typescript": "5.9.3",
+    "vitest": "3.2.7"
+  }
+}
