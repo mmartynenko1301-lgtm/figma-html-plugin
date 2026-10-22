@@ -210,7 +210,7 @@ async function rasterizeOwnLook(node: Exclude<ContainerLike, GroupNode>, abs: Ma
   if (!('children' in node) || node.children.length === 0) {
     const bounds = node.absoluteRenderBounds ?? { x: abs[4], y: abs[5], width: node.width, height: node.height };
     const bytes = await node.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: RASTER_SCALE } });
-    return imageNode(node, bounds, abs, bytes, 'png', state);
+    return imageNode(node, bounds, abs, bytes, 'png', state, `${node.id}#look`);
   }
   // The copy can land elsewhere on the canvas (on the page, or moved by auto layout),
   // so its render bounds are measured against its own transform, not the original's.
@@ -220,18 +220,26 @@ async function rasterizeOwnLook(node: Exclude<ContainerLike, GroupNode>, abs: Ma
     const cloneAbs = fromFigma(clone.absoluteTransform);
     const bounds = clone.absoluteRenderBounds ?? { x: cloneAbs[4], y: cloneAbs[5], width: node.width, height: node.height };
     const bytes = await clone.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: RASTER_SCALE } });
-    return imageNode(node, bounds, cloneAbs, bytes, 'png', state);
+    return imageNode(node, bounds, cloneAbs, bytes, 'png', state, `${node.id}#look`);
   } finally {
     clone.remove();
   }
 }
 
-function imageNode(node: SceneNode, bounds: Rect, parentAbs: Matrix, bytes: Uint8Array, ext: 'png' | 'svg', state: State): ImageNode {
+function imageNode(
+  node: SceneNode,
+  bounds: Rect,
+  parentAbs: Matrix,
+  bytes: Uint8Array,
+  ext: 'png' | 'svg',
+  state: State,
+  id = node.id,
+): ImageNode {
   const assetId = `${node.id}:${state.assets.length}`;
   state.assets.push({ id: assetId, ext, bytes });
   return {
     kind: 'image',
-    id: node.id,
+    id,
     name: node.name,
     // Render bounds are axis-aligned, so rotation is already baked into the image.
     transform: relative(parentAbs, translation(bounds.x, bounds.y)),

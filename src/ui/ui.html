@@ -3,34 +3,44 @@
 <head>
 <meta charset="utf-8">
 <style>
-  body { margin: 0; font: 12px/1.4 Inter, system-ui, sans-serif; color: var(--figma-color-text, #222); background: var(--figma-color-bg, #fff); }
+  :root { --text: var(--figma-color-text, #222); --muted: var(--figma-color-text-secondary, #777); --border: var(--figma-color-border, #e2e2e2); --bg: var(--figma-color-bg, #fff); --bg2: var(--figma-color-bg-secondary, #f5f5f5); --brand: var(--figma-color-bg-brand, #0d99ff); --onbrand: var(--figma-color-text-onbrand, #fff); --danger: var(--figma-color-text-danger, #d33); --warn: var(--figma-color-text-warning, #b86200); --sel: var(--figma-color-bg-selected, #e5f4ff); }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 12px/1.4 Inter, system-ui, sans-serif; color: var(--text); background: var(--bg); }
   main { padding: 12px; display: flex; flex-direction: column; gap: 10px; }
-  h1 { font-size: 13px; font-weight: 600; margin: 0; }
-  label { display: flex; flex-direction: column; gap: 4px; color: var(--figma-color-text-secondary, #666); }
-  input, select { font: inherit; padding: 6px 8px; border: 1px solid var(--figma-color-border, #ddd); border-radius: 6px; background: transparent; color: inherit; }
-  button { font: inherit; font-weight: 600; padding: 8px; border: 0; border-radius: 6px; cursor: pointer; background: var(--figma-color-bg-brand, #0d99ff); color: var(--figma-color-text-onbrand, #fff); }
+  header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+  h1 { font-size: 13px; font-weight: 600; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  h2 { font-size: 12px; font-weight: 600; margin: 0 0 6px; }
+  section { border-top: 1px solid var(--border); padding-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+  label { display: flex; flex-direction: column; gap: 3px; color: var(--muted); }
+  label.check { flex-direction: row; align-items: center; gap: 6px; color: var(--text); }
+  input, select { font: inherit; padding: 5px 7px; border: 1px solid var(--border); border-radius: 5px; background: var(--bg); color: var(--text); min-width: 0; }
+  button { font: inherit; font-weight: 600; padding: 8px; border: 0; border-radius: 6px; cursor: pointer; background: var(--brand); color: var(--onbrand); }
+  button.secondary { background: var(--bg2); color: var(--text); font-weight: 500; flex: 1; }
+  button.link { background: none; color: var(--brand); padding: 0; text-align: left; font-weight: 500; }
   button:disabled { opacity: .4; cursor: default; }
-  .muted { color: var(--figma-color-text-secondary, #666); }
-  .preview { border: 1px solid var(--figma-color-border, #ddd); border-radius: 6px; overflow: auto; max-height: 300px; background: repeating-conic-gradient(#eee 0 25%, #fff 0 50%) 0 0/16px 16px; }
-  .preview iframe { border: 0; display: block; transform-origin: 0 0; }
+  .row { display: flex; gap: 8px; }
+  .muted { color: var(--muted); margin: 0; }
+  .small { font-size: 11px; }
+  .error { color: var(--danger); margin: 0; }
   ul { margin: 0; padding-left: 16px; }
-  .error { color: var(--figma-color-text-danger, #d33); }
+  .preview { border: 1px solid var(--border); border-radius: 6px; overflow: hidden; background: repeating-conic-gradient(#eee 0 25%, #fff 0 50%) 0 0/16px 16px; display: flex; justify-content: center; }
+  .preview.empty { height: 120px; align-items: center; background: var(--bg2); }
+  .preview iframe { border: 0; display: block; transform-origin: 0 0; flex: none; }
+  .layers { list-style: none; padding: 0; max-height: 220px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; }
+  .layers li { display: flex; align-items: center; gap: 4px; padding: 4px 8px; cursor: pointer; }
+  .layers li:hover { background: var(--bg2); }
+  .layers li.selected { background: var(--sel); }
+  .layers .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .badge { font-size: 10px; padding: 1px 5px; border-radius: 8px; background: var(--bg2); color: var(--muted); }
+  .badge.warn { color: var(--warn); }
+  fieldset { min-width: 0; border: 1px solid var(--border); border-radius: 6px; padding: 8px; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+  legend { font-weight: 600; padding: 0 4px; }
+  .grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
+  input:not([type=checkbox]), select { width: 100%; }
 </style>
 </head>
 <body>
-<main>
-  <h1>Експорт банера в HTML5</h1>
-  <label>Фрейм
-    <select id="frame"></select>
-  </label>
-  <label>Посилання (clickTag)
-    <input id="clicktag" type="url" value="https://example.com">
-  </label>
-  <button id="export" disabled>Експортувати ZIP</button>
-  <div id="status" class="muted">Виділіть фрейм банера.</div>
-  <div class="preview" id="preview" hidden></div>
-  <ul id="warnings" class="muted"></ul>
-</main>
+<div id="app"></div>
 <!-- SCRIPT -->
 </body>
 </html>

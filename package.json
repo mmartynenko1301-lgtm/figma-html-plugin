@@ -10,7 +10,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "jszip": "3.10.2"
+    "jszip": "3.10.2",
+    "preact": "10.29.8"
   },
   "devDependencies": {
     "@figma/plugin-typings": "1.142.0",

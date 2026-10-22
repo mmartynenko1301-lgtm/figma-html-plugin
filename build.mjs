@@ -18,10 +18,10 @@ const inlineUi = {
   },
 };
 
-const common = { bundle: true, target: 'es2019', logLevel: 'info' };
+const common = { bundle: true, target: 'es2019', logLevel: 'info', jsx: 'automatic', jsxImportSource: 'preact' };
 
 const main = await esbuild.context({ ...common, entryPoints: ['src/main/code.ts'], outfile: 'dist/code.js' });
-const ui = await esbuild.context({ ...common, entryPoints: ['src/ui/ui.ts'], outfile: 'dist/ui.js', write: false, plugins: [inlineUi] });
+const ui = await esbuild.context({ ...common, entryPoints: ['src/ui/ui.tsx'], outfile: 'dist/ui.js', write: false, plugins: [inlineUi] });
 
 if (watch) {
   await Promise.all([main.watch(), ui.watch()]);
