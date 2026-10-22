@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { defaultHover, defaultIntro, defaultLoop } from '../src/shared/anim';
 import { color, generate, googleFontsUrl } from '../src/core/generate';
 import { sampleBanner } from './fixtures';
 
@@ -41,5 +42,28 @@ describe('helpers', () => {
   it('builds a Google Fonts URL for several families', () => {
     const url = googleFontsUrl(new Map([['Open Sans', new Set(['0,700', '0,400'])], ['Inter', new Set(['0,400'])]]));
     expect(url).toBe('https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,400&family=Open+Sans:ital,wght@0,400;0,700&display=swap');
+  });
+});
+
+describe('generate with animations', () => {
+  const banner = sampleBanner();
+  const anims = {
+    '0:2': { v: 1 as const, intro: defaultIntro('fadeIn'), loop: null, hover: null },
+    '0:3': { v: 1 as const, intro: null, loop: defaultLoop('pulse'), hover: defaultHover('grow') },
+  };
+  const { html, warnings } = generate(banner, { clickTag: 'https://example.com', anims, maxDuration: 30 });
+
+  it('moves placement to an outer element and keeps the layer inside the wrappers', () => {
+    expect(html).toMatch(/<div class="(n\d+)"><div class="\1-i"><div class="n\d+" data-name="Headline">/);
+    expect(html).toMatch(/<div class="(n\d+)"><div class="\1-l"><div class="\1-h"><div class="n\d+" data-name="CTA">/);
+    // the CTA content keeps its size but loses its left/top
+    expect(html).toMatch(/\.n\d+\{width:120px;height:40px;background-color:#0d99ff;border-radius:8px\}/);
+    expect(warnings).toEqual([]);
+  });
+
+  it('starts animations only after load and respects reduced motion', () => {
+    expect(html).toContain('#banner.play{visibility:visible}');
+    expect(html).toContain('prefers-reduced-motion:reduce');
+    expect(html).toContain('b.classList.add("play")');
   });
 });

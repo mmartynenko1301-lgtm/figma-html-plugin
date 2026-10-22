@@ -1,8 +1,15 @@
 import type { Asset, Banner, BannerNode, BoxNode, ImageNode, Matrix, RGBA, Shadow, TextNode, TextSegment } from '../shared/ir';
+import type { LayerAnim } from '../shared/anim';
+import { isEmptyAnim } from '../shared/anim';
+import { wrapAnimated } from './animate';
 import { isTranslation } from './matrix';
 
 export interface GenerateOptions {
   clickTag: string;
+  /** Animations by layer id. Layers missing from the banner (e.g. inside a rasterized group) are ignored. */
+  anims?: Record<string, LayerAnim>;
+  /** Network time limit in seconds; loops are cut to fit. Null or absent = no limit. */
+  maxDuration?: number | null;
 }
 
 export interface OutputFile {
@@ -13,11 +20,20 @@ export interface OutputFile {
 export interface GenerateResult {
   html: string;
   files: OutputFile[];
+  warnings: string[];
 }
 
 export function generate(banner: Banner, options: GenerateOptions): GenerateResult {
   const assetPaths = placeAssets(banner.assets);
-  const ctx: Ctx = { css: [], fonts: new Map(), assetPaths, counter: 0 };
+  const ctx: Ctx = {
+    css: [],
+    fonts: new Map(),
+    assetPaths,
+    counter: 0,
+    anims: options.anims ?? {},
+    maxDuration: options.maxDuration ?? null,
+    warnings: [],
+  };
 
   const body = renderBox(banner.root, ctx, true);
   const html = page(banner, options, ctx, body);
@@ -30,7 +46,7 @@ export function generate(banner: Banner, options: GenerateOptions): GenerateResu
     written.add(path);
     files.push({ path, data: asset.bytes });
   }
-  return { html, files };
+  return { html, files, warnings: ctx.warnings };
 }
 
 interface Ctx {
@@ -39,6 +55,9 @@ interface Ctx {
   fonts: Map<string, Set<string>>;
   assetPaths: Map<string, string>;
   counter: number;
+  anims: Record<string, LayerAnim>;
+  maxDuration: number | null;
+  warnings: string[];
 }
 
 function page(banner: Banner, options: GenerateOptions, ctx: Ctx, body: string): string {
@@ -55,17 +74,19 @@ function page(banner: Banner, options: GenerateOptions, ctx: Ctx, body: string):
     '<style>',
     '*{margin:0;padding:0;box-sizing:border-box}',
     `html,body{width:${w}px;height:${h}px;overflow:hidden}`,
-    `#banner{position:relative;width:${w}px;height:${h}px;overflow:hidden;cursor:pointer}`,
+    `#banner{position:relative;width:${w}px;height:${h}px;overflow:hidden;cursor:pointer;visibility:hidden}`,
+    '#banner.play{visibility:visible}',
     // :where() keeps specificity at zero so per-layer classes override these defaults.
     ':where(#banner div,#banner img){position:absolute;left:0;top:0;transform-origin:0 0}',
     ':where(#banner img){display:block}',
     ...ctx.css,
+    '@media (prefers-reduced-motion:reduce){#banner *{animation:none!important;transition:none!important}}',
     '</style>',
     `<script>var clickTag = ${JSON.stringify(options.clickTag).replace(/</g, '\\u003c')};</script>`,
     '</head>',
     '<body>',
     body,
-    '<script>document.getElementById("banner").addEventListener("click",function(){window.open(window.clickTag,"_blank")});</script>',
+    `<script>${RUNTIME}</script>`,
     '</body>',
     '</html>',
     '',
@@ -74,20 +95,41 @@ function page(banner: Banner, options: GenerateOptions, ctx: Ctx, body: string):
     .join('\n');
 }
 
+// Starts animations once images and fonts are ready, so nothing pops in mid-animation.
+const RUNTIME = [
+  'var b=document.getElementById("banner");',
+  'b.addEventListener("click",function(){window.open(window.clickTag,"_blank")});',
+  'function play(){b.classList.add("play")}',
+  'window.addEventListener("load",function(){document.fonts?document.fonts.ready.then(play,play):play()});',
+].join('');
+
 function renderNode(node: BannerNode, ctx: Ctx): string {
+  const anim = ctx.anims[node.id];
+  if (!anim || isEmptyAnim(anim)) return renderPlain(node, ctx, true);
+
+  // Placement lives on an outer element so animation transforms stay independent of it.
+  const cls = nextClass(ctx);
+  ctx.css.push(`.${cls}{${placement(node, true).join(';')}}`);
+  const wrapped = wrapAnimated(cls, node.name, anim, ctx.maxDuration);
+  ctx.css.push(...wrapped.css);
+  ctx.warnings.push(...wrapped.warnings);
+  return `<div class="${cls}">${wrapped.open}${renderPlain(node, ctx, false)}${wrapped.close}</div>`;
+}
+
+function renderPlain(node: BannerNode, ctx: Ctx, placed: boolean): string {
   switch (node.kind) {
     case 'box':
-      return renderBox(node, ctx, false);
+      return renderBox(node, ctx, false, placed);
     case 'text':
-      return renderText(node, ctx);
+      return renderText(node, ctx, placed);
     case 'image':
-      return renderImage(node, ctx);
+      return renderImage(node, ctx, placed);
   }
 }
 
-function renderBox(node: BoxNode, ctx: Ctx, isRoot: boolean): string {
+function renderBox(node: BoxNode, ctx: Ctx, isRoot: boolean, placed = true): string {
   const cls = nextClass(ctx);
-  const rules: string[] = isRoot ? [] : [...placement(node), ...common(node)];
+  const rules: string[] = isRoot ? [] : [...placement(node, placed), ...common(node)];
   if (isRoot && node.opacity < 1) rules.push(`opacity:${num(node.opacity)}`);
 
   if (node.background.length === 1) {
@@ -124,13 +166,13 @@ function renderBox(node: BoxNode, ctx: Ctx, isRoot: boolean): string {
   return `<div ${attrs} data-name="${escapeHtml(node.name)}">${children}</div>`;
 }
 
-function renderText(node: TextNode, ctx: Ctx): string {
+function renderText(node: TextNode, ctx: Ctx, placed: boolean): string {
   const cls = nextClass(ctx);
   const justify = { TOP: 'flex-start', CENTER: 'center', BOTTOM: 'flex-end' }[node.verticalAlign];
   const align = { LEFT: 'left', CENTER: 'center', RIGHT: 'right', JUSTIFIED: 'justify' }[node.align];
   ctx.css.push(
     `.${cls}{${[
-      ...placement(node),
+      ...placement(node, placed),
       ...common(node),
       'display:flex',
       'flex-direction:column',
@@ -169,16 +211,18 @@ function segmentRules(seg: TextSegment): string[] {
   return rules;
 }
 
-function renderImage(node: ImageNode, ctx: Ctx): string {
+function renderImage(node: ImageNode, ctx: Ctx, placed: boolean): string {
   const cls = nextClass(ctx);
-  ctx.css.push(`.${cls}{${[...placement(node), ...common(node)].join(';')}}`);
+  ctx.css.push(`.${cls}{${[...placement(node, placed), ...common(node)].join(';')}}`);
   const src = ctx.assetPaths.get(node.assetId);
   if (!src) throw new Error(`Missing asset ${node.assetId} for layer "${node.name}"`);
   return `<img class="${cls}" src="${src}" alt="" data-name="${escapeHtml(node.name)}">`;
 }
 
-function placement(node: BannerNode): string[] {
+/** Size, plus position when `placed` (an animated layer's position sits on its wrapper instead). */
+function placement(node: BannerNode, placed: boolean): string[] {
   const rules = [`width:${px(node.width)}`, `height:${px(node.height)}`];
+  if (!placed) return rules;
   const t = node.transform;
   if (isTranslation(t)) {
     if (t[4] !== 0) rules.push(`left:${px(t[4])}`);
