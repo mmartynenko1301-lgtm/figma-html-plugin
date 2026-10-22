@@ -52,4 +52,6 @@ export type UiMessage =
   /** Adds presets to a scope; a preset with an existing id or name replaces it. */
   | { type: 'save-presets'; scope: PresetScope; presets: Preset[] }
   | { type: 'delete-preset'; scope: PresetScope; id: string }
+  /** Resizes the plugin window; the size is remembered for next time. */
+  | { type: 'resize'; width: number; height: number }
   | { type: 'close' };

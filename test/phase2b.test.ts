@@ -6,7 +6,7 @@ import { LEVELS, fitToLimit, minifySvg, optimizeAssets } from '../src/core/optim
 import { defaultCustom, defaultIntro, defaultLoop, defaultOutro, emptyAnim, parseAnim, parsePresets } from '../src/shared/anim';
 import type { Asset } from '../src/shared/ir';
 import { withNewFrame } from '../src/ui/keyframes';
-import { layerBars, moveBar, timelineSpan } from '../src/ui/timeline-model';
+import { layerBars, moveBar, tickStep, timelineSpan } from '../src/ui/timeline-model';
 import { sampleBanner } from './fixtures';
 
 const opts = { maxDuration: 30, isText: false, pieces: 1, radius: null };
@@ -132,6 +132,8 @@ describe('timeline', () => {
     expect(bars[bars.length - 1]).toEqual({ kind: 'outro', start: 6, end: 6.5 });
     expect(moveBar(anim, 'intro', 0.33).intro!.delay).toBe(0.85);
     expect(moveBar(anim, 'outro', -10).outro!.at).toBe(0);
-    expect(timelineSpan([{ ...emptyAnim(), loop: defaultLoop('pulse') }], null)).toBe(10);
+    expect(timelineSpan([{ ...emptyAnim(), loop: defaultLoop('pulse') }], null)).toBe(6);
+    expect(tickStep(7)).toBe(2);
+    expect(tickStep(3)).toBe(0.5);
   });
 });

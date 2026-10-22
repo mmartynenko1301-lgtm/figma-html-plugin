@@ -6,39 +6,15 @@ import { bundleFiles, uniqueBases } from '../core/bundle';
 import { generate } from '../core/generate';
 import { NETWORKS, validate } from '../core/networks';
 import { LEVELS, fitToLimit, optimizeAssets } from '../core/optimize';
-import type { BannerSettings, Easing, HoverAnim, IntroAnim, LayerAnim, LoopAnim, NetworkId, OutroAnim, Preset, PresetScope } from '../shared/anim';
-import {
-  EASINGS,
-  HOVER_PRESETS,
-  INTRO_PRESETS,
-  LOOP_PRESETS,
-  OUTRO_PRESETS,
-  defaultHover,
-  defaultIntro,
-  defaultLoop,
-  defaultOutro,
-  emptyAnim,
-  isEmptyAnim,
-  isSplitPreset,
-} from '../shared/anim';
+import type { BannerSettings, LayerAnim, NetworkId, Preset, PresetScope } from '../shared/anim';
+import { isEmptyAnim } from '../shared/anim';
 import type { Banner, BannerNode } from '../shared/ir';
 import type { BuildPurpose, FrameInfo, LayerInfo, MainMessage, UiMessage } from '../shared/messages';
-import {
-  EASING_LABELS,
-  HOVER_LABELS,
-  INTRO_LABELS,
-  LOOP_LABELS,
-  OUTRO_LABELS,
-  hoverAmountLabel,
-  introAmountLabel,
-  loopAmountLabel,
-  outroAmountLabel,
-} from './labels';
 import { canvasCodec } from './codec';
-import { CustomEditor } from './keyframes';
+import { LayerEditor } from './editor';
 import { download, previewHtml, slug, zipFiles } from './package';
 import { Presets } from './presets';
-import { Timeline } from './timeline';
+import { LayerTimeline } from './timeline';
 
 function send(message: UiMessage): void {
   parent.postMessage({ pluginMessage: message }, '*');
@@ -56,6 +32,16 @@ interface Built extends BuildResult {
   ids: Set<string>;
 }
 
+type Tab = 'anim' | 'presets' | 'export';
+
+interface ExportResult {
+  name: string;
+  size: string;
+  kb: number;
+  maxKb: number | null;
+  problems: string[];
+}
+
 type Pending = { resolve: (r: BuildResult) => void; reject: (e: Error) => void };
 
 function App() {
@@ -71,6 +57,30 @@ function App() {
   const [replay, setReplay] = useState(0);
   const [clipboard, setClipboard] = useState<LayerAnim | null>(null);
   const [presets, setPresets] = useState<Record<PresetScope, Preset[]>>({ file: [], mine: [] });
+  const [tab, setTab] = useState<Tab>(() => {
+    try {
+      const saved = localStorage.getItem('tab');
+      return saved === 'presets' || saved === 'export' ? saved : 'anim';
+    } catch {
+      return 'anim';
+    }
+  });
+  const [lastExport, setLastExport] = useState<ExportResult[] | null>(null);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('tab', tab);
+    } catch {
+      // Storage can be unavailable in the plugin iframe; the tab then resets on reopen.
+    }
+  }, [tab]);
+
+  // Status messages fade after a while unless they report a problem.
+  useEffect(() => {
+    if (!status || status.error) return;
+    const timer = setTimeout(() => setStatus(null), 6000);
+    return () => clearTimeout(timer);
+  }, [status]);
 
   const frameRef = useRef<FrameInfo | null>(null);
   frameRef.current = frame;
@@ -218,6 +228,16 @@ function App() {
       }
       const totalKb = items.reduce((sum, item) => sum + item.zip.length, 0) / 1024;
       setNotes(notesOut);
+      setLastExport(
+        items.map((item) => ({
+          name: item.name,
+          size: `${Math.round(item.width)}×${Math.round(item.height)}`,
+          kb: item.zip.length / 1024,
+          maxKb: net.maxKb,
+          problems: item.problems,
+        })),
+      );
+      if (items.some((item) => item.problems.length > 0)) setTab('export');
       setStatus({
         text: `Готово: банерів ${items.length}, ${totalKb.toFixed(1)} KB.`,
         error: items.some((item) => item.problems.length > 0),
@@ -231,112 +251,223 @@ function App() {
 
   if (!frame || !settings) {
     return (
-      <main>
+      <main class="empty-state">
+        <div class="hero">▶</div>
         <h1>Banner Export</h1>
-        <p class="muted">Виділіть фрейм банера або будь-який шар у ньому. Для пакетного експорту виділіть кілька фреймів.</p>
+        <ol>
+          <li>Виділіть фрейм банера або будь-який шар у ньому.</li>
+          <li>Додайте шарам анімації або застосуйте пресет.</li>
+          <li>Виберіть мережу та експортуйте ZIP.</li>
+        </ol>
+        <p class="muted small">Щоб експортувати кілька розмірів разом, виділіть кілька фреймів.</p>
+        <ResizeHandle />
       </main>
     );
   }
 
   const selected = layers.find((l) => l.id === selectedIds[0]) ?? null;
+  const problemCount = lastExport?.reduce((n, item) => n + item.problems.length, 0) ?? 0;
 
   return (
-    <main>
-      <header>
-        <h1>{frame.name}</h1>
-        <span class="muted">
-          {frame.width}×{frame.height}
-        </span>
-      </header>
-
-      <Preview built={built} anims={anims} settings={settings} replay={replay} busy={busy} />
-      <div class="row">
-        <button class="secondary" onClick={() => setReplay((n) => n + 1)} disabled={!built}>
-          ↻ Програти
-        </button>
-        <button class="secondary" onClick={() => void refreshPreview(frame.id)} disabled={!!busy}>
-          Оновити з макета
-        </button>
+    <div class="app">
+      <div class="top">
+        <header>
+          <h1 title={frame.name}>{frame.name}</h1>
+          <span class="muted">
+            {frame.width}×{frame.height}
+          </span>
+          <button class="chip-net" title="Мережа для експорту" onClick={() => setTab('export')}>
+            {network.label}
+          </button>
+        </header>
+        <Preview built={built} anims={anims} settings={settings} replay={replay} busy={busy} />
+        <div class="toolbar">
+          <button class="icon text" onClick={() => setReplay((n) => n + 1)} disabled={!built} title="Програти анімацію спочатку">
+            ▶ Програти
+          </button>
+          <button class="icon text" onClick={() => void refreshPreview(frame.id)} disabled={!!busy} title="Перечитати макет з Figma">
+            ⟳ Оновити
+          </button>
+          <span class={`duration${length !== 'infinite' && network.maxDuration !== null && length > network.maxDuration ? ' over' : ''}`}>
+            {length === 'infinite' ? '∞' : `${length} с`}
+            {network.maxDuration !== null ? ` / ${network.maxDuration} с` : ''}
+          </span>
+        </div>
+        <nav class="tabs">
+          {(
+            [
+              ['anim', 'Анімація'],
+              ['presets', 'Пресети'],
+              ['export', 'Експорт'],
+            ] as const
+          ).map(([id, label]) => (
+            <button class={tab === id ? 'on' : ''} onClick={() => setTab(id)}>
+              {label}
+              {id === 'export' && problemCount > 0 && <span class="count">{problemCount}</span>}
+            </button>
+          ))}
+        </nav>
       </div>
-      <p class="muted small">
-        Тривалість анімації: {length === 'infinite' ? 'нескінченно' : `${length} с`}
-        {network.maxDuration !== null ? ` (ліміт ${network.maxDuration} с)` : ''}
-      </p>
 
-      <Timeline layers={layers} maxDuration={network.maxDuration} selectedIds={selectedIds} replay={replay} onChange={updateAnim} />
+      <main>
+        {tab === 'anim' && (
+          <>
+            <LayerTimeline
+              layers={layers}
+              maxDuration={network.maxDuration}
+              selectedIds={selectedIds}
+              ids={built?.ids ?? null}
+              replay={replay}
+              onSelect={(id) => send({ type: 'select-layer', nodeId: id })}
+              onChange={updateAnim}
+            />
+            <div class="row between">
+              <span class="legend">
+                <span class="dot intro" />
+                поява <span class="dot custom" />
+                кадри <span class="dot loop" />
+                цикл <span class="dot hover" />
+                hover <span class="dot outro" />
+                зникнення
+              </span>
+              <button class="link" onClick={staggerIntros} disabled={!layers.some((l) => l.anim?.intro)} title="Затримки появи 0, 0.25, 0.5 с… у порядку шарів">
+                Появи по черзі
+              </button>
+            </div>
+            {selected ? (
+              <LayerEditor
+                key={selected.id}
+                layer={selected}
+                selectedCount={selectedIds.length}
+                canPaste={!!clipboard}
+                onChange={(anim) => updateAnim(selected.id, anim)}
+                onCopy={() => {
+                  if (!selected.anim) return;
+                  setClipboard(structuredCloneAnim(selected.anim));
+                  setStatus({ text: `Анімацію «${selected.name}» скопійовано.` });
+                }}
+                onPaste={() => clipboard && applyToSelected(clipboard)}
+              />
+            ) : (
+              <p class="hint">Клацніть шар у списку або на полотні, щоб додати йому анімацію.</p>
+            )}
+          </>
+        )}
 
-      <section>
-        <h2>Шари</h2>
-        <LayerList layers={layers} selectedIds={selectedIds} ids={built?.ids ?? null} />
-        <button class="link" onClick={staggerIntros} disabled={!layers.some((l) => l.anim?.intro)}>
-          Розкласти появу по черзі (крок 0.25 с)
-        </button>
-      </section>
+        {tab === 'presets' && (
+          <Presets
+            presets={presets}
+            current={selected?.anim ?? null}
+            selectedCount={selectedIds.length}
+            onApply={(anim, name) => {
+              applyToSelected(anim);
+              setStatus({ text: `Пресет «${name}» застосовано${selectedIds.length > 1 ? ` до ${selectedIds.length} шарів` : ''}.` });
+            }}
+            send={send}
+            onStatus={(text, error) => setStatus({ text, error })}
+          />
+        )}
 
-      {selected ? (
-        <LayerEditor
-          key={selected.id}
-          layer={selected}
-          selectedCount={selectedIds.length}
-          canPaste={!!clipboard}
-          onChange={(anim) => updateAnim(selected.id, anim)}
-          onCopy={() => setClipboard(selected.anim ? structuredCloneAnim(selected.anim) : null)}
-          onPaste={() => clipboard && applyToSelected(clipboard)}
-        />
-      ) : (
-        <p class="muted">Виберіть шар у списку або на полотні, щоб додати анімацію.</p>
-      )}
+        {tab === 'export' && (
+          <section>
+            <label>
+              Мережа
+              <select value={settings.network} onChange={(e) => updateSettings({ network: e.currentTarget.value as NetworkId })}>
+                {Object.values(NETWORKS).map((n) => (
+                  <option value={n.id}>{n.label}</option>
+                ))}
+              </select>
+            </label>
+            <div class="facts">
+              <span>Вага: {network.maxKb === null ? 'без ліміту' : `до ${network.maxKb} KB`}</span>
+              <span>Тривалість: {network.maxDuration === null ? 'без ліміту' : `до ${network.maxDuration} с`}</span>
+            </div>
+            <p class="muted small">{network.note}</p>
+            <label>
+              Посилання (clickTag)
+              <input type="url" value={settings.clickTag} onChange={(e) => updateSettings({ clickTag: e.currentTarget.value.trim() })} />
+            </label>
+            <label class="check">
+              <input type="checkbox" checked={settings.backup} onChange={(e) => updateSettings({ backup: e.currentTarget.checked })} />
+              Додати backup JPG
+            </label>
+            <label class="check">
+              <input type="checkbox" checked={settings.optimize} onChange={(e) => updateSettings({ optimize: e.currentTarget.checked })} />
+              Стискати картинки, якщо ZIP не вміщується в ліміт
+            </label>
+            {frames.length > 1 && (
+              <p class="muted small">
+                Виділено фреймів: {frames.length}. Мережа, посилання і backup беруться з поточного фрейму, анімації — з кожного фрейму свої.
+              </p>
+            )}
+            {lastExport && (
+              <div class="results">
+                <h3>Останній експорт</h3>
+                {lastExport.map((item) => (
+                  <div class="result">
+                    <div class="row between">
+                      <strong>{item.name}</strong>
+                      <span class="muted small">
+                        {item.size} · {item.kb.toFixed(1)} KB{item.maxKb !== null ? ` з ${item.maxKb}` : ''}
+                      </span>
+                    </div>
+                    {item.maxKb !== null && (
+                      <div class={`meter${item.kb > item.maxKb ? ' over' : ''}`}>
+                        <span style={{ width: `${Math.min(100, (item.kb / item.maxKb) * 100)}%` }} />
+                      </div>
+                    )}
+                    {item.problems.map((p) => (
+                      <p class="error small">{p}</p>
+                    ))}
+                  </div>
+                ))}
+                {notes.length > 0 && (
+                  <ul class="muted small">
+                    {notes.map((n) => (
+                      <li>{n}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+          </section>
+        )}
+      </main>
 
-      <Presets
-        presets={presets}
-        current={selected?.anim ?? null}
-        selectedCount={selectedIds.length}
-        onApply={applyToSelected}
-        send={send}
-        onStatus={(text, error) => setStatus({ text, error })}
-      />
-
-      <section>
-        <h2>Експорт</h2>
-        <label>
-          Мережа
-          <select value={settings.network} onChange={(e) => updateSettings({ network: e.currentTarget.value as NetworkId })}>
-            {Object.values(NETWORKS).map((n) => (
-              <option value={n.id}>{n.label}</option>
-            ))}
-          </select>
-        </label>
-        <p class="muted small">{network.note}</p>
-        <label>
-          Посилання (clickTag)
-          <input type="url" value={settings.clickTag} onChange={(e) => updateSettings({ clickTag: e.currentTarget.value.trim() })} />
-        </label>
-        <label class="check">
-          <input type="checkbox" checked={settings.backup} onChange={(e) => updateSettings({ backup: e.currentTarget.checked })} />
-          Додати backup JPG
-        </label>
-        <label class="check">
-          <input type="checkbox" checked={settings.optimize} onChange={(e) => updateSettings({ optimize: e.currentTarget.checked })} />
-          Стискати картинки, якщо ZIP не вміщується в ліміт
-        </label>
-        {frames.length > 1 && (
-          <p class="muted small">
-            Виділено фреймів: {frames.length}. Мережа, посилання і backup беруться з поточного фрейму, анімації — з кожного фрейму свої.
+      <footer>
+        {status && (
+          <p class={`status ${status.error ? 'error' : ''}`} onClick={() => setStatus(null)} title="Сховати">
+            {status.text}
           </p>
         )}
-        <button onClick={() => void exportAll()} disabled={!!busy}>
+        <button class="primary" onClick={() => void exportAll()} disabled={!!busy}>
           {busy && busy.startsWith('Експорт') ? busy : frames.length > 1 ? `Експортувати всі (${frames.length})` : 'Експортувати ZIP'}
         </button>
-        {status && <p class={status.error ? 'error' : 'muted'}>{status.text}</p>}
-        {notes.length > 0 && (
-          <ul class="muted small">
-            {notes.map((n) => (
-              <li>{n}</li>
-            ))}
-          </ul>
-        )}
-      </section>
-    </main>
+      </footer>
+      <ResizeHandle />
+    </div>
+  );
+}
+
+/** Corner grip that resizes the plugin window; the main thread remembers the size. */
+function ResizeHandle() {
+  const start = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
+  return (
+    <div
+      class="resize"
+      title="Змінити розмір вікна"
+      onPointerDown={(e) => {
+        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+        start.current = { x: e.screenX, y: e.screenY, w: window.innerWidth, h: window.innerHeight };
+      }}
+      onPointerMove={(e) => {
+        const s = start.current;
+        if (!s) return;
+        send({ type: 'resize', width: Math.round(s.w + e.screenX - s.x), height: Math.round(s.h + e.screenY - s.y) });
+      }}
+      onPointerUp={() => (start.current = null)}
+      onPointerCancel={() => (start.current = null)}
+    />
   );
 }
 
@@ -361,9 +492,17 @@ function Preview(props: { built: Built | null; anims: Record<string, LayerAnim>;
     return () => clearTimeout(timer);
   }, [built, anims, settings, replay]);
 
+  // The preview follows the window width, so a resized plugin window shows a bigger banner.
+  const [boxWidth, setBoxWidth] = useState(window.innerWidth - 26);
+  useEffect(() => {
+    const onResize = () => setBoxWidth(window.innerWidth - 26);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
   if (!built) return <div class="preview empty muted">{busy ?? 'Немає превʼю'}</div>;
   const { width, height } = built.banner;
-  const scale = Math.min(1, 352 / width, 320 / height);
+  const scale = Math.min(1, boxWidth / width, Math.max(120, window.innerHeight * 0.24) / height);
   return (
     <div class="preview">
       {/* The box takes the scaled size, so a wide banner stays centred and fully visible. */}
@@ -371,233 +510,6 @@ function Preview(props: { built: Built | null; anims: Record<string, LayerAnim>;
         <iframe srcDoc={doc} width={width} height={height} style={{ transform: `scale(${scale})`, width: `${width}px`, height: `${height}px` }} />
       </div>
     </div>
-  );
-}
-
-function LayerList(props: { layers: LayerInfo[]; selectedIds: string[]; ids: Set<string> | null }) {
-  const { layers, selectedIds, ids } = props;
-  if (layers.length === 0) return <p class="muted">У фреймі немає шарів.</p>;
-  return (
-    <ul class="layers">
-      {layers.map((layer) => {
-        const lost = !!layer.anim && !!ids && !ids.has(layer.id);
-        return (
-          <li
-            class={selectedIds.includes(layer.id) ? 'selected' : ''}
-            style={{ paddingLeft: `${8 + layer.depth * 14}px` }}
-            onClick={() => send({ type: 'select-layer', nodeId: layer.id })}
-            title={lost ? 'Шар увійшов у растрове зображення батьківського шару, тому його анімація не застосується' : layer.name}
-          >
-            <span class="name">{layer.name}</span>
-            {layer.anim?.intro && <span class="badge">поява</span>}
-            {layer.anim?.loop && <span class="badge">цикл</span>}
-            {layer.anim?.hover && <span class="badge">hover</span>}
-            {layer.anim?.outro && <span class="badge">зникнення</span>}
-            {layer.anim?.custom && <span class="badge">кадри</span>}
-            {lost && <span class="badge warn">растр</span>}
-          </li>
-        );
-      })}
-    </ul>
-  );
-}
-
-function LayerEditor(props: {
-  layer: LayerInfo;
-  selectedCount: number;
-  canPaste: boolean;
-  onChange: (anim: LayerAnim) => void;
-  onCopy: () => void;
-  onPaste: () => void;
-}) {
-  const { layer, onChange } = props;
-  const anim = layer.anim ?? emptyAnim();
-  const set = (patch: Partial<LayerAnim>) => onChange({ ...anim, ...patch });
-  const isText = layer.type === 'TEXT';
-
-  return (
-    <section class="editor">
-      <div class="row between">
-        <h2>Анімація: {layer.name}</h2>
-        <div class="row tight">
-          <button class="link" onClick={props.onCopy} disabled={!layer.anim}>
-            Копіювати
-          </button>
-          <button class="link" onClick={props.onPaste} disabled={!props.canPaste}>
-            {props.selectedCount > 1 ? `Вставити (${props.selectedCount})` : 'Вставити'}
-          </button>
-          <button class="link" onClick={() => onChange(emptyAnim())} disabled={!layer.anim}>
-            Скинути
-          </button>
-        </div>
-      </div>
-
-      <fieldset>
-        <legend>Поява</legend>
-        <select
-          value={anim.intro?.preset ?? ''}
-          onChange={(e) => {
-            const v = e.currentTarget.value as IntroAnim['preset'] | '';
-            set({ intro: v ? { ...defaultIntro(v), delay: anim.intro?.delay ?? 0 } : null });
-          }}
-        >
-          <option value="">Немає</option>
-          {INTRO_PRESETS.filter((p) => isText || !isSplitPreset(p)).map((p) => (
-            <option value={p}>{INTRO_LABELS[p]}</option>
-          ))}
-        </select>
-        {anim.intro && (
-          <div class="grid">
-            <NumberField label="Затримка, с" value={anim.intro.delay} step={0.1} onChange={(v) => set({ intro: { ...anim.intro!, delay: v } })} />
-            <NumberField label="Тривалість, с" value={anim.intro.duration} step={0.1} min={0.05} onChange={(v) => set({ intro: { ...anim.intro!, duration: v } })} />
-            <EasingField value={anim.intro.easing} onChange={(easing) => set({ intro: { ...anim.intro!, easing } })} />
-            {introAmountLabel(anim.intro.preset) && (
-              <NumberField
-                label={introAmountLabel(anim.intro.preset)!}
-                value={anim.intro.amount}
-                step={anim.intro.preset === 'scaleIn' || anim.intro.preset === 'zoomOut' ? 0.05 : 2}
-                onChange={(v) => set({ intro: { ...anim.intro!, amount: v } })}
-              />
-            )}
-            {isSplitPreset(anim.intro.preset) && (
-              <NumberField
-                label={anim.intro.preset === 'wordsUp' ? 'Крок між словами, с' : 'Крок між літерами, с'}
-                value={anim.intro.stagger}
-                step={0.01}
-                onChange={(v) => set({ intro: { ...anim.intro!, stagger: v } })}
-              />
-            )}
-          </div>
-        )}
-      </fieldset>
-
-      <fieldset>
-        <legend>Цикл</legend>
-        <select
-          value={anim.loop?.preset ?? ''}
-          onChange={(e) => {
-            const v = e.currentTarget.value as LoopAnim['preset'] | '';
-            set({ loop: v ? defaultLoop(v) : null });
-          }}
-        >
-          <option value="">Немає</option>
-          {LOOP_PRESETS.map((p) => (
-            <option value={p}>{LOOP_LABELS[p]}</option>
-          ))}
-        </select>
-        {anim.loop && (
-          <div class="grid">
-            <NumberField label={anim.intro ? 'Старт після появи, с' : 'Старт, с'} value={anim.loop.delay} step={0.1} onChange={(v) => set({ loop: { ...anim.loop!, delay: v } })} />
-            <NumberField label="Рух, с" value={anim.loop.duration} step={0.1} min={0.05} onChange={(v) => set({ loop: { ...anim.loop!, duration: v } })} />
-            <NumberField label="Пауза між циклами, с" value={anim.loop.pause} step={0.1} onChange={(v) => set({ loop: { ...anim.loop!, pause: v } })} />
-            <NumberField
-              label={loopAmountLabel(anim.loop.preset)}
-              value={anim.loop.amount}
-              step={anim.loop.preset === 'pulse' || anim.loop.preset === 'shine' ? 0.01 : 1}
-              onChange={(v) => set({ loop: { ...anim.loop!, amount: v } })}
-            />
-          </div>
-        )}
-      </fieldset>
-
-      <fieldset>
-        <legend>Hover</legend>
-        <select
-          value={anim.hover?.preset ?? ''}
-          onChange={(e) => {
-            const v = e.currentTarget.value as HoverAnim['preset'] | '';
-            set({ hover: v ? defaultHover(v) : null });
-          }}
-        >
-          <option value="">Немає</option>
-          {HOVER_PRESETS.map((p) => (
-            <option value={p}>{HOVER_LABELS[p]}</option>
-          ))}
-        </select>
-        {anim.hover && (
-          <div class="grid">
-            <label>
-              Коли
-              <select value={anim.hover.trigger} onChange={(e) => set({ hover: { ...anim.hover!, trigger: e.currentTarget.value as HoverAnim['trigger'] } })}>
-                <option value="banner">Наведення на банер</option>
-                <option value="layer">Наведення на шар</option>
-              </select>
-            </label>
-            <NumberField label="Тривалість, с" value={anim.hover.duration} step={0.05} min={0} onChange={(v) => set({ hover: { ...anim.hover!, duration: v } })} />
-            <NumberField
-              label={hoverAmountLabel(anim.hover.preset)}
-              value={anim.hover.amount}
-              step={anim.hover.preset === 'lift' ? 1 : 0.01}
-              onChange={(v) => set({ hover: { ...anim.hover!, amount: v } })}
-            />
-          </div>
-        )}
-      </fieldset>
-
-      <fieldset>
-        <legend>Зникнення</legend>
-        <select
-          value={anim.outro?.preset ?? ''}
-          onChange={(e) => {
-            const v = e.currentTarget.value as OutroAnim['preset'] | '';
-            set({ outro: v ? { ...defaultOutro(v), at: anim.outro?.at ?? defaultOutro(v).at } : null });
-          }}
-        >
-          <option value="">Немає</option>
-          {OUTRO_PRESETS.map((p) => (
-            <option value={p}>{OUTRO_LABELS[p]}</option>
-          ))}
-        </select>
-        {anim.outro && (
-          <div class="grid">
-            <NumberField label="Коли, с від старту" value={anim.outro.at} step={0.1} onChange={(v) => set({ outro: { ...anim.outro!, at: v } })} />
-            <NumberField label="Тривалість, с" value={anim.outro.duration} step={0.1} min={0.05} onChange={(v) => set({ outro: { ...anim.outro!, duration: v } })} />
-            <EasingField value={anim.outro.easing} onChange={(easing) => set({ outro: { ...anim.outro!, easing } })} />
-            {outroAmountLabel(anim.outro.preset) && (
-              <NumberField
-                label={outroAmountLabel(anim.outro.preset)!}
-                value={anim.outro.amount}
-                step={anim.outro.preset === 'zoomAway' ? 0.05 : 2}
-                onChange={(v) => set({ outro: { ...anim.outro!, amount: v } })}
-              />
-            )}
-          </div>
-        )}
-      </fieldset>
-
-      <CustomEditor value={anim.custom} onChange={(custom) => set({ custom })} />
-    </section>
-  );
-}
-
-function EasingField(props: { value: Easing; onChange: (e: Easing) => void }) {
-  return (
-    <label>
-      Easing
-      <select value={props.value} onChange={(e) => props.onChange(e.currentTarget.value as Easing)}>
-        {EASINGS.map((ez) => (
-          <option value={ez}>{EASING_LABELS[ez]}</option>
-        ))}
-      </select>
-    </label>
-  );
-}
-
-function NumberField(props: { label: string; value: number; step: number; min?: number; onChange: (v: number) => void }) {
-  return (
-    <label>
-      {props.label}
-      <input
-        type="number"
-        value={props.value}
-        step={props.step}
-        min={props.min ?? 0}
-        onInput={(e) => {
-          const v = parseFloat(e.currentTarget.value);
-          if (Number.isFinite(v) && v >= (props.min ?? 0)) props.onChange(v);
-        }}
-      />
-    </label>
   );
 }
 
