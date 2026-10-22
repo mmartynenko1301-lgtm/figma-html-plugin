@@ -205,14 +205,22 @@ async function rasterize(node: SceneNode, parentAbs: Matrix, state: State, ext: 
   return imageNode(node, bounds, parentAbs, bytes, ext, state);
 }
 
-/** Exports a container without its children, so the children stay separate layers. */
+/** Exports a shape's own fills, strokes and effects as an image; children stay separate layers. */
 async function rasterizeOwnLook(node: Exclude<ContainerLike, GroupNode>, abs: Matrix, state: State): Promise<ImageNode> {
+  if (!('children' in node) || node.children.length === 0) {
+    const bounds = node.absoluteRenderBounds ?? { x: abs[4], y: abs[5], width: node.width, height: node.height };
+    const bytes = await node.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: RASTER_SCALE } });
+    return imageNode(node, bounds, abs, bytes, 'png', state);
+  }
+  // The copy can land elsewhere on the canvas (on the page, or moved by auto layout),
+  // so its render bounds are measured against its own transform, not the original's.
   const clone = node.clone();
   try {
-    if ('children' in clone) for (const child of [...clone.children]) child.remove();
-    const bounds = clone.absoluteRenderBounds ?? { x: abs[4], y: abs[5], width: node.width, height: node.height };
+    for (const child of [...clone.children]) child.remove();
+    const cloneAbs = fromFigma(clone.absoluteTransform);
+    const bounds = clone.absoluteRenderBounds ?? { x: cloneAbs[4], y: cloneAbs[5], width: node.width, height: node.height };
     const bytes = await clone.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: RASTER_SCALE } });
-    return imageNode(node, bounds, abs, bytes, 'png', state);
+    return imageNode(node, bounds, cloneAbs, bytes, 'png', state);
   } finally {
     clone.remove();
   }
