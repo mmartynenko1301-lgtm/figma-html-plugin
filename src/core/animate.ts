@@ -1,9 +1,10 @@
-import type { Easing, HoverAnim, IntroAnim, LayerAnim, LoopAnim } from '../shared/anim';
-import { introEnd } from '../shared/anim';
+import type { Easing, HoverAnim, IntroAnim, LayerAnim, LoopAnim, OutroAnim } from '../shared/anim';
+import { introEnd, isSplitPreset } from '../shared/anim';
 
-// Each animated layer becomes nested wrappers, so intro, loop and hover transforms
-// never overwrite each other or the layer's own placement:
-//   .nX (placement) > .nX-i (intro) > .nX-l (loop) > .nX-h (hover) > layer content
+// Each animated layer becomes nested wrappers, so outro, intro, loop and hover
+// transforms never overwrite each other or the layer's own placement:
+//   .nX (placement) > .nX-o (outro) > .nX-i (intro) > .nX-l (loop) > .nX-h (hover) > layer content
+// Split-text intros animate the words or letters inside the text instead of a wrapper.
 
 const EASING_CSS: Record<Easing, string> = {
   easeOut: 'ease-out',
@@ -14,6 +15,17 @@ const EASING_CSS: Record<Easing, string> = {
   linear: 'linear',
 };
 
+export interface WrapOptions {
+  /** Network limit in seconds; loops are cut to fit. Null = loop forever. */
+  maxDuration: number | null;
+  /** True for text layers, which can take split-text intros. */
+  isText: boolean;
+  /** Words or letters the split intro animates (1 when not split). */
+  pieces: number;
+  /** CSS border-radius of the layer, so the shine highlight follows rounded corners. */
+  radius: string | null;
+}
+
 export interface Wrapped {
   open: string;
   close: string;
@@ -22,28 +34,38 @@ export interface Wrapped {
   warnings: string[];
 }
 
+/** The intro a layer actually gets: split-text presets fall back to a fade on non-text layers. */
+export function effectiveIntro(intro: IntroAnim | null, isText: boolean): IntroAnim | null {
+  if (intro && isSplitPreset(intro.preset) && !isText) return { ...intro, preset: 'fadeIn' };
+  return intro;
+}
+
 /**
  * Builds the wrapper markup and CSS for one layer.
  * @param cls class of the placement element that holds the wrappers
- * @param maxDuration network limit in seconds; loops are cut to fit, null = loop forever
  */
-export function wrapAnimated(cls: string, name: string, anim: LayerAnim, maxDuration: number | null): Wrapped {
+export function wrapAnimated(cls: string, name: string, anim: LayerAnim, opts: WrapOptions): Wrapped {
   const css: string[] = [];
   const warnings: string[] = [];
   const opens: string[] = [];
+  const intro = effectiveIntro(anim.intro, opts.isText);
 
-  if (anim.intro) {
+  if (anim.outro) {
+    opens.push(`${cls}-o`);
+    css.push(...outroCss(`${cls}-o`, anim.outro));
+  }
+  if (intro && !isSplitPreset(intro.preset)) {
     opens.push(`${cls}-i`);
-    css.push(...introCss(`${cls}-i`, anim.intro));
+    css.push(...introCss(`${cls}-i`, intro));
   }
   if (anim.loop) {
-    const start = introEnd(anim) + anim.loop.delay;
-    const iterations = loopIterations(anim.loop, start, maxDuration);
+    const start = introEnd({ ...anim, intro }, opts.pieces) + anim.loop.delay;
+    const iterations = loopIterations(anim.loop, start, opts.maxDuration);
     if (iterations === 0) {
-      warnings.push(`Цикл «${name}» не вміщується в ліміт ${maxDuration} с і пропущений.`);
+      warnings.push(`Цикл «${name}» не вміщується в ліміт ${opts.maxDuration} с і пропущений.`);
     } else {
       opens.push(`${cls}-l`);
-      css.push(...loopCss(`${cls}-l`, anim.loop, start, iterations));
+      css.push(...loopCss(`${cls}-l`, anim.loop, start, iterations, opts.radius));
     }
   }
   if (anim.hover) {
@@ -60,6 +82,25 @@ export function wrapAnimated(cls: string, name: string, anim: LayerAnim, maxDura
   };
 }
 
+/**
+ * CSS for a split-text intro. Each piece gets class `cls` and an inline
+ * animation-delay from {@link pieceDelay}.
+ */
+export function splitCss(cls: string, intro: IntroAnim): string[] {
+  const words = intro.preset === 'wordsUp';
+  const from = words ? `opacity:0;transform:translateY(${n(intro.amount)}px)` : 'opacity:0';
+  return [
+    // Words need inline-block to move; letters stay inline so words still wrap as whole words.
+    `.${cls}{display:${words ? 'inline-block' : 'inline'};white-space:pre}`,
+    `@keyframes ${cls}{from{${from}}}`,
+    `#banner.play .${cls}{animation:${cls} ${n(intro.duration)}s ${EASING_CSS[intro.easing]} both}`,
+  ];
+}
+
+export function pieceDelay(intro: IntroAnim, index: number): string {
+  return `${n(intro.delay + intro.stagger * index)}s`;
+}
+
 /** Number of loop cycles that fit before the limit; null limit means infinite. */
 export function loopIterations(loop: LoopAnim, start: number, maxDuration: number | null): number | 'infinite' {
   if (maxDuration === null) return 'infinite';
@@ -74,6 +115,7 @@ export function animationLength(anims: LayerAnim[], maxDuration: number | null):
   let end = 0;
   for (const anim of anims) {
     end = Math.max(end, introEnd(anim));
+    if (anim.outro) end = Math.max(end, anim.outro.at + anim.outro.duration);
     if (anim.loop) {
       const start = introEnd(anim) + anim.loop.delay;
       const n = loopIterations(anim.loop, start, maxDuration);
@@ -86,7 +128,7 @@ export function animationLength(anims: LayerAnim[], maxDuration: number | null):
 
 function introCss(cls: string, intro: IntroAnim): string[] {
   const a = intro.amount;
-  const from = {
+  const from: Record<string, string> = {
     fadeIn: 'opacity:0',
     slideUp: `opacity:0;transform:translateY(${n(a)}px)`,
     slideDown: `opacity:0;transform:translateY(${n(-a)}px)`,
@@ -94,19 +136,51 @@ function introCss(cls: string, intro: IntroAnim): string[] {
     slideRight: `opacity:0;transform:translateX(${n(-a)}px)`,
     scaleIn: `opacity:0;transform:scale(${n(a)})`,
     zoomOut: `opacity:0;transform:scale(${n(a)})`,
-  }[intro.preset];
+    revealRight: 'clip-path:inset(0 100% 0 0)',
+    revealUp: 'clip-path:inset(100% 0 0 0)',
+  };
+  const to = intro.preset.startsWith('reveal') ? 'to{clip-path:inset(0 0 0 0)}' : '';
   return [
-    `@keyframes ${cls}{from{${from}}}`,
+    `@keyframes ${cls}{from{${from[intro.preset]}}${to}}`,
     `#banner.play .${cls}{animation:${cls} ${n(intro.duration)}s ${EASING_CSS[intro.easing]} ${n(intro.delay)}s both}`,
   ];
 }
 
-function loopCss(cls: string, loop: LoopAnim, start: number, iterations: number | 'infinite'): string[] {
+function outroCss(cls: string, outro: OutroAnim): string[] {
+  const a = outro.amount;
+  const to = {
+    fadeOut: 'opacity:0',
+    slideOutUp: `opacity:0;transform:translateY(${n(-a)}px)`,
+    slideOutDown: `opacity:0;transform:translateY(${n(a)}px)`,
+    slideOutLeft: `opacity:0;transform:translateX(${n(-a)}px)`,
+    slideOutRight: `opacity:0;transform:translateX(${n(a)}px)`,
+    zoomAway: `opacity:0;transform:scale(${n(a)})`,
+  }[outro.preset];
+  return [
+    `@keyframes ${cls}{to{${to}}}`,
+    `#banner.play .${cls}{animation:${cls} ${n(outro.duration)}s ${EASING_CSS[outro.easing]} ${n(outro.at)}s forwards}`,
+  ];
+}
+
+function loopCss(cls: string, loop: LoopAnim, start: number, iterations: number | 'infinite', radius: string | null): string[] {
   const cycle = loop.duration + loop.pause;
   // Motion takes the first p% of each cycle; the rest is the pause.
   const p = (loop.duration / cycle) * 100;
   const at = (fraction: number) => `${n(p * fraction)}%`;
   const a = loop.amount;
+  const timing = `${n(cycle)}s ease-in-out ${n(start)}s ${iterations}`;
+
+  if (loop.preset === 'shine') {
+    // A soft light band sweeps across the layer; the wrapper clips it to the layer's shape.
+    return [
+      `.${cls}{overflow:hidden${radius ? `;border-radius:${radius}` : ''}}`,
+      `.${cls}::after{content:"";position:absolute;top:0;left:0;width:60%;height:100%;pointer-events:none;` +
+        `background:linear-gradient(100deg,rgba(255,255,255,0) 20%,rgba(255,255,255,${n(a)}) 50%,rgba(255,255,255,0) 80%);transform:translateX(-120%)}`,
+      `@keyframes ${cls}{0%{transform:translateX(-120%)}${at(1)},100%{transform:translateX(200%)}}`,
+      `#banner.play .${cls}::after{animation:${cls} ${timing}}`,
+    ];
+  }
+
   let frames: string;
   switch (loop.preset) {
     case 'pulse':
@@ -131,10 +205,7 @@ function loopCss(cls: string, loop: LoopAnim, start: number, iterations: number 
         `${at(0.2)},${at(0.6)}{transform:rotate(${n(-a)}deg)}${at(0.4)},${at(0.8)}{transform:rotate(${n(a)}deg)}`;
       break;
   }
-  return [
-    `@keyframes ${cls}{${frames}}`,
-    `#banner.play .${cls}{animation:${cls} ${n(cycle)}s ease-in-out ${n(start)}s ${iterations}}`,
-  ];
+  return [`@keyframes ${cls}{${frames}}`, `#banner.play .${cls}{animation:${cls} ${timing}}`];
 }
 
 function hoverCss(placementCls: string, cls: string, hover: HoverAnim): string[] {

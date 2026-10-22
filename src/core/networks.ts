@@ -1,8 +1,12 @@
 import type { NetworkId } from '../shared/anim';
 
+/** How the banner is packaged and how clicks reach the network. */
+export type Platform = 'standard' | 'adform' | 'admixer';
+
 export interface NetworkProfile {
   id: NetworkId;
   label: string;
+  platform: Platform;
   /** ZIP size limit in KB, or null when the network sets none. */
   maxKb: number | null;
   maxFiles: number | null;
@@ -25,6 +29,7 @@ export const NETWORKS: Record<NetworkId, NetworkProfile> = {
   'google-ads': {
     id: 'google-ads',
     label: 'Google Ads',
+    platform: 'standard',
     maxKb: 600,
     maxFiles: 40,
     maxDuration: 30,
@@ -34,15 +39,39 @@ export const NETWORKS: Record<NetworkId, NetworkProfile> = {
   'google-dv': {
     id: 'google-dv',
     label: 'Google Ad Manager / CM360 / DV360',
+    platform: 'standard',
     maxKb: 150,
     maxFiles: null,
     maxDuration: 30,
     sizes: null,
     note: 'Мережа підставляє clickTag сама. Ліміт 150 KB — типовий для початкового завантаження; уточніть у медіаплані.',
   },
+  // https://support.adform.com/documentation/coty-manuals-old/building-banners-for-use-in-adform/manually-creating-manifestjson/
+  adform: {
+    id: 'adform',
+    label: 'Adform',
+    platform: 'adform',
+    maxKb: null,
+    maxFiles: null,
+    maxDuration: 30,
+    sizes: null,
+    note: 'У ZIP додається manifest.json, клік іде через clickTAG з Adform.DHTML.js. Ліміт ваги задає майданчик; Adform рахує вагу розпакованих файлів.',
+  },
+  // https://helpcenter.admixer.com/overview/standard-api-2-0-html5
+  admixer: {
+    id: 'admixer',
+    label: 'Admixer',
+    platform: 'admixer',
+    maxKb: 300,
+    maxFiles: null,
+    maxDuration: 30,
+    sizes: null,
+    note: 'Головний файл — body.html, клік іде через globalHTML5Api.click(), посилання задається в кабінеті Admixer. Ліміт 300 KB взято з довідки Admixer, уточніть для вашої кампанії.',
+  },
   iab: {
     id: 'iab',
     label: 'IAB (загальний)',
+    platform: 'standard',
     maxKb: 150,
     maxFiles: null,
     maxDuration: 30,
@@ -52,6 +81,7 @@ export const NETWORKS: Record<NetworkId, NetworkProfile> = {
   none: {
     id: 'none',
     label: 'Без обмежень',
+    platform: 'standard',
     maxKb: null,
     maxFiles: null,
     maxDuration: null,

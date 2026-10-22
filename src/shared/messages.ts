@@ -20,19 +20,31 @@ export interface LayerInfo {
 export type MainMessage =
   | {
       type: 'state';
-      /** Banner frame that contains the current selection, if any. */
+      /** Banner frame that contains the first selected node, if any; the one being edited. */
       frame: FrameInfo | null;
+      /** Every banner frame touched by the selection, for batch export. */
+      frames: FrameInfo[];
       layers: LayerInfo[];
       settings: BannerSettings | null;
-      /** Layer selected on the canvas inside that frame. */
-      selectedLayerId: string | null;
+      /** Layers selected on the canvas inside that frame; the first one is edited. */
+      selectedLayerIds: string[];
     }
-  | { type: 'banner'; purpose: 'preview' | 'export'; banner: Banner; warnings: string[]; backup: Uint8Array | null }
+  | {
+      type: 'banner';
+      purpose: BuildPurpose;
+      banner: Banner;
+      warnings: string[];
+      /** Animations stored on the frame's layers, by layer id. */
+      anims: Record<string, LayerAnim>;
+      backup: Uint8Array | null;
+    }
   | { type: 'error'; message: string };
+
+export type BuildPurpose = 'preview' | 'export';
 
 /** UI → main thread. */
 export type UiMessage =
-  | { type: 'build'; frameId: string; purpose: 'preview' | 'export' }
+  | { type: 'build'; frameId: string; purpose: BuildPurpose; backup: boolean }
   | { type: 'set-anim'; nodeId: string; anim: LayerAnim | null }
   | { type: 'set-settings'; frameId: string; settings: BannerSettings }
   | { type: 'select-layer'; nodeId: string }
