@@ -137,3 +137,19 @@ describe('timeline', () => {
     expect(tickStep(3)).toBe(0.5);
   });
 });
+
+describe('gif', () => {
+  it('keeps GIF files as they are and sizes them like Figma', async () => {
+    const gif: Asset = { id: 'g', ext: 'gif', bytes: new Uint8Array(50000) };
+    const never: ImageCodec = { isOpaque: async () => true, encode: async () => { throw new Error('no re-encode'); } };
+    expect((await optimizeAssets([gif], LEVELS[4], never))[0]).toBe(gif);
+
+    const banner = sampleBanner();
+    banner.assets.push(gif);
+    banner.root.children.push({ kind: 'image', id: 'bg#gif', name: 'Bg', transform: [1, 0, 0, 1, 0, 0], width: 300, height: 250, opacity: 1, assetId: 'g', fit: 'cover' });
+    const { html, files } = generate(banner, { clickTag: 'x' });
+    const path = files.find((f) => f.path.endsWith('.gif'))!.path;
+    expect(html).toContain(`src="${path}"`);
+    expect(html).toMatch(/width:300px;height:250px;object-fit:cover/);
+  });
+});

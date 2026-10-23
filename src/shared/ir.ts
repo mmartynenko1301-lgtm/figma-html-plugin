@@ -75,13 +75,15 @@ export interface TextNode extends BaseNode {
 export interface ImageNode extends BaseNode {
   kind: 'image';
   assetId: string;
+  /** How the file fills the box when its aspect ratio differs (GIF fills keep Figma's scale mode). Default: stretch. */
+  fit?: 'cover' | 'contain';
 }
 
 export type BannerNode = BoxNode | TextNode | ImageNode;
 
 export interface Asset {
   id: string;
-  ext: 'png' | 'jpg' | 'svg';
+  ext: 'png' | 'jpg' | 'svg' | 'gif';
   bytes: Uint8Array;
 }
 

@@ -23,7 +23,8 @@ export function previewHtml(html: string, files: OutputFile[], cache: Map<string
     if (typeof file.data === 'string') continue;
     let url = cache.get(file.path);
     if (!url) {
-      const type = file.path.endsWith('.svg') ? 'image/svg+xml' : file.path.endsWith('.jpg') ? 'image/jpeg' : 'image/png';
+      const ext = file.path.slice(file.path.lastIndexOf('.') + 1);
+      const type = { svg: 'image/svg+xml', jpg: 'image/jpeg', gif: 'image/gif' }[ext] ?? 'image/png';
       url = URL.createObjectURL(new Blob([file.data as Uint8Array<ArrayBuffer>], { type }));
       cache.set(file.path, url);
     }

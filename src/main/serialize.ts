@@ -66,8 +66,14 @@ async function serializeContainer(node: ContainerLike, parentAbs: Matrix, abs: M
   };
 
   if (node.type !== 'GROUP') {
+    const gif = await gifFill(node);
     const look = cssLook(node);
-    if (look) {
+    if (gif) {
+      // An animated GIF fill is kept as the original file, since a PNG export would freeze it.
+      Object.assign(box, gif.look);
+      box.clips = true;
+      box.children.push(gifImage(node, gif, state));
+    } else if (look) {
       Object.assign(box, look);
     } else {
       // Gradient, image fill or another effect CSS cannot draw: keep the container
@@ -86,11 +92,61 @@ async function serializeContainer(node: ContainerLike, parentAbs: Matrix, abs: M
   return box;
 }
 
-/** CSS description of a shape's fills, stroke, corners and effects, or null if CSS cannot match it. */
-function cssLook(node: Exclude<ContainerLike, GroupNode>): Partial<BoxNode> | null {
-  const background: RGBA[] = [];
+interface GifFill {
+  bytes: Uint8Array;
+  fit: 'cover' | 'contain';
+  opacity: number;
+  /** The shape's look without the GIF: solid fills under it, corners, stroke, shadows. */
+  look: Partial<BoxNode>;
+}
+
+/**
+ * The GIF of a shape whose top visible fill is a GIF image, when everything else about
+ * the shape can be drawn with CSS; null otherwise (the shape is then exported as PNG).
+ */
+async function gifFill(node: Exclude<ContainerLike, GroupNode>): Promise<GifFill | null> {
   if (node.fills === figma.mixed) return null;
-  for (const paint of node.fills) {
+  const visible = node.fills.filter((p) => p.visible !== false);
+  const top = visible[visible.length - 1];
+  if (!top || top.type !== 'IMAGE' || !top.imageHash) return null;
+  const image = figma.getImageByHash(top.imageHash);
+  if (!image) return null;
+  const bytes = await image.getBytesAsync();
+  // "GIF8": GIF87a or GIF89a.
+  if (!(bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38)) return null;
+  // The rest of the shape (solid fills under the GIF, corners, stroke, shadows) must be CSS-drawable.
+  const look = cssLook(node, visible.slice(0, -1));
+  if (!look) return null;
+  return { bytes, fit: top.scaleMode === 'FIT' ? 'contain' : 'cover', opacity: top.opacity ?? 1, look };
+}
+
+function gifImage(node: Exclude<ContainerLike, GroupNode>, gif: GifFill, state: State): ImageNode {
+  const assetId = `${node.id}:${state.assets.length}`;
+  state.assets.push({ id: assetId, ext: 'gif', bytes: gif.bytes });
+  if (gif.bytes.length > 150 * 1024) {
+    state.warnings.push(`«${node.name}»: анімований GIF важить ${Math.round(gif.bytes.length / 1024)} KB і не стискається автоматично.`);
+  }
+  return {
+    kind: 'image',
+    id: `${node.id}#gif`,
+    name: node.name,
+    transform: [1, 0, 0, 1, 0, 0],
+    width: node.width,
+    height: node.height,
+    opacity: gif.opacity,
+    assetId,
+    fit: gif.fit,
+  };
+}
+
+/**
+ * CSS description of a shape's fills, stroke, corners and effects, or null if CSS cannot match it.
+ * `fills` overrides the shape's own, e.g. to check it without a GIF fill that is exported separately.
+ */
+function cssLook(node: Exclude<ContainerLike, GroupNode>, fills = node.fills): Partial<BoxNode> | null {
+  const background: RGBA[] = [];
+  if (fills === figma.mixed) return null;
+  for (const paint of fills) {
     if (!paint.visible) continue;
     if (paint.type !== 'SOLID' || (paint.blendMode && !isNormalBlend(paint.blendMode))) return null;
     background.push(rgba(paint.color, paint.opacity));
