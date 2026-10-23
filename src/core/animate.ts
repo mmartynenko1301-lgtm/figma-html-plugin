@@ -1,5 +1,6 @@
 import type { CustomAnim, Easing, HoverAnim, IntroAnim, Keyframe, LayerAnim, LoopAnim, OutroAnim } from '../shared/anim';
 import { introEnd, isSplitPreset } from '../shared/anim';
+import { t } from '../shared/i18n';
 
 // Each animated layer becomes nested wrappers, so outro, intro, loop and hover
 // transforms never overwrite each other or the layer's own placement:
@@ -61,10 +62,12 @@ export function wrapAnimated(cls: string, name: string, anim: LayerAnim, opts: W
   if (anim.custom) {
     const iterations = customIterations(anim.custom, opts.maxDuration);
     if (iterations === 0) {
-      warnings.push(`Власна анімація «${name}» не вміщується в ліміт ${opts.maxDuration} с і пропущена.`);
+      warnings.push(t(`Власна анімація «${name}» не вміщується в ліміт ${opts.maxDuration} с і пропущена.`, `Keyframe animation of “${name}” does not fit the ${opts.maxDuration} s limit and was skipped.`));
     } else {
       if (anim.custom.repeat > 0 && iterations !== anim.custom.repeat) {
-        warnings.push(`Власну анімацію «${name}» скорочено до ${iterations} повторів, щоб вміститися в ліміт ${opts.maxDuration} с.`);
+        warnings.push(
+          t(`Власну анімацію «${name}» скорочено до ${iterations} повторів, щоб вміститися в ліміт ${opts.maxDuration} с.`, `Keyframe animation of “${name}” was cut to ${iterations} repeats to fit the ${opts.maxDuration} s limit.`),
+        );
       }
       opens.push(`${cls}-c`);
       css.push(...customCss(`${cls}-c`, anim.custom, iterations));
@@ -74,7 +77,7 @@ export function wrapAnimated(cls: string, name: string, anim: LayerAnim, opts: W
     const start = introEnd({ ...anim, intro }, opts.pieces) + anim.loop.delay;
     const iterations = loopIterations(anim.loop, start, opts.maxDuration);
     if (iterations === 0) {
-      warnings.push(`Цикл «${name}» не вміщується в ліміт ${opts.maxDuration} с і пропущений.`);
+      warnings.push(t(`Цикл «${name}» не вміщується в ліміт ${opts.maxDuration} с і пропущений.`, `Loop of “${name}” does not fit the ${opts.maxDuration} s limit and was skipped.`));
     } else {
       opens.push(`${cls}-l`);
       css.push(...loopCss(`${cls}-l`, anim.loop, start, iterations, opts.radius));

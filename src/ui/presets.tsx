@@ -4,10 +4,15 @@ import { parsePresets } from '../shared/anim';
 import { BUILTIN_PRESETS } from '../shared/builtin-presets';
 import type { UiMessage } from '../shared/messages';
 import { download } from './package';
+import { t } from '../shared/i18n';
 
 const SCOPE_LABELS: Record<PresetScope, string> = {
-  file: 'Команда (у цьому файлі)',
-  mine: 'Мої (на цьому компʼютері)',
+  get file() {
+    return t('Команда (у цьому файлі)', 'Team (in this file)');
+  },
+  get mine() {
+    return t('Мої (на цьому компʼютері)', 'Mine (on this computer)');
+  },
 };
 
 /**
@@ -30,7 +35,7 @@ export function Presets(props: {
   const save = () => {
     if (!current || !name.trim()) return;
     send({ type: 'save-presets', scope, presets: [{ id: `p${Date.now().toString(36)}`, name: name.trim(), anim: current }] });
-    props.onStatus(`Пресет «${name.trim()}» збережено.`);
+    props.onStatus(t(`Пресет «${name.trim()}» збережено.`, `Preset “${name.trim()}” saved.`));
     setName('');
   };
 
@@ -42,18 +47,18 @@ export function Presets(props: {
   const importJson = async (file: File) => {
     const list = parsePresets(await file.text());
     if (list.length === 0) {
-      props.onStatus('У файлі немає пресетів анімації.', true);
+      props.onStatus(t('У файлі немає пресетів анімації.', 'The file has no animation presets.'), true);
       return;
     }
     send({ type: 'save-presets', scope, presets: list });
-    props.onStatus(`Імпортовано пресетів: ${list.length}.`);
+    props.onStatus(t(`Імпортовано пресетів: ${list.length}.`, `Presets imported: ${list.length}.`));
   };
 
   const group = (title: string, list: Preset[], deletable: PresetScope | null) => (
     <div class="preset-group">
       <h3>{title}</h3>
       {list.length === 0 ? (
-        <p class="muted small">Поки порожньо.</p>
+        <p class="muted small">{t('Поки порожньо.', 'Empty for now.')}</p>
       ) : (
         list.map((p) => (
           <div class="preset">
@@ -63,11 +68,11 @@ export function Presets(props: {
             <span class="preset-kinds">
               {(['intro', 'custom', 'loop', 'hover', 'outro'] as const).map((k) => p.anim[k] && <span class={`dot ${k}`} />)}
             </span>
-            <button class="small" disabled={selectedCount === 0} onClick={() => props.onApply(p.anim, p.name)} title={selectedCount === 0 ? 'Спершу виділіть шар' : ''}>
-              Застосувати
+            <button class="small" disabled={selectedCount === 0} onClick={() => props.onApply(p.anim, p.name)} title={selectedCount === 0 ? t('Спершу виділіть шар', 'Select a layer first') : ''}>
+              {t('Застосувати', 'Apply')}
             </button>
             {deletable && (
-              <button class="icon" title="Видалити пресет" onClick={() => send({ type: 'delete-preset', scope: deletable, id: p.id })}>
+              <button class="icon" title={t('Видалити пресет', 'Delete preset')} onClick={() => send({ type: 'delete-preset', scope: deletable, id: p.id })}>
                 ✕
               </button>
             )}
@@ -81,34 +86,34 @@ export function Presets(props: {
     <section>
       <p class="muted small">
         {selectedCount === 0
-          ? 'Виділіть шар, щоб застосувати пресет.'
+          ? t('Виділіть шар, щоб застосувати пресет.', 'Select a layer to apply a preset.')
           : selectedCount === 1
-            ? 'Пресет замінить анімацію вибраного шару.'
-            : `Пресет замінить анімацію ${selectedCount} виділених шарів.`}
+            ? t('Пресет замінить анімацію вибраного шару.', 'The preset replaces the animation of the selected layer.')
+            : t(`Пресет замінить анімацію ${selectedCount} виділених шарів.`, `The preset replaces the animation of ${selectedCount} selected layers.`)}
       </p>
-      {group('Стартові', BUILTIN_PRESETS, null)}
+      {group(t('Стартові', 'Starter'), BUILTIN_PRESETS, null)}
       {group(SCOPE_LABELS.file, presets.file, 'file')}
       {group(SCOPE_LABELS.mine, presets.mine, 'mine')}
 
       <div class="save-preset">
-        <h3>Зберегти анімацію шару як пресет</h3>
-        <input placeholder={current ? 'Назва, наприклад «CTA весна»' : 'У вибраного шару немає анімації'} value={name} disabled={!current} onInput={(e) => setName(e.currentTarget.value)} onKeyDown={(e) => e.key === 'Enter' && save()} />
+        <h3>{t('Зберегти анімацію шару як пресет', 'Save layer animation as a preset')}</h3>
+        <input placeholder={current ? t('Назва, наприклад «CTA весна»', 'Name, e.g. “Spring CTA”') : t('У вибраного шару немає анімації', 'The selected layer has no animation')} value={name} disabled={!current} onInput={(e) => setName(e.currentTarget.value)} onKeyDown={(e) => e.key === 'Enter' && save()} />
         <div class="row">
           <select value={scope} onChange={(e) => setScope(e.currentTarget.value as PresetScope)}>
             <option value="file">{SCOPE_LABELS.file}</option>
             <option value="mine">{SCOPE_LABELS.mine}</option>
           </select>
           <button class="fit" disabled={!current || !name.trim()} onClick={save}>
-            Зберегти
+            {t('Зберегти', 'Save')}
           </button>
         </div>
       </div>
       <div class="row tight">
         <button class="link" disabled={presets.file.length + presets.mine.length === 0} onClick={exportJson}>
-          Експорт JSON
+          {t('Експорт JSON', 'Export JSON')}
         </button>
         <label class="link-file">
-          Імпорт JSON
+          {t('Імпорт JSON', 'Import JSON')}
           <input
             type="file"
             accept=".json,application/json"
@@ -120,7 +125,7 @@ export function Presets(props: {
           />
         </label>
       </div>
-      <p class="muted small">Імпорт додає пресети у групу, вибрану вище. Через JSON пресети можна передати в інший файл Figma.</p>
+      <p class="muted small">{t('Імпорт додає пресети у групу, вибрану вище. Через JSON пресети можна передати в інший файл Figma.', 'Import adds presets to the group chosen above. JSON lets you move presets to another Figma file.')}</p>
     </section>
   );
 }

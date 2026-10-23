@@ -1,5 +1,6 @@
 import type { Asset, Banner, BannerNode, BoxNode, ImageNode, Matrix, RGBA, Shadow, Stroke, TextNode, TextSegment } from '../shared/ir';
 import { fromFigma, relative, translation } from '../core/matrix';
+import { t } from '../shared/i18n';
 
 const RASTER_SCALE = 2;
 
@@ -26,7 +27,7 @@ async function serializeNode(node: SceneNode, parentAbs: Matrix, state: State): 
 
   const reason = rasterReason(node);
   if (reason) {
-    state.warnings.push(`«${node.name}» експортовано як картинку: ${reason}`);
+    state.warnings.push(t(`«${node.name}» експортовано як картинку: ${reason}`, `“${node.name}” was exported as an image: ${reason}`));
     return rasterize(node, parentAbs, state, isVectorLike(node) ? 'svg' : 'png');
   }
 
@@ -78,7 +79,7 @@ async function serializeContainer(node: ContainerLike, parentAbs: Matrix, abs: M
     } else {
       // Gradient, image fill or another effect CSS cannot draw: keep the container
       // (so children stay animatable) and draw its own look as a background image.
-      state.warnings.push(`Фон «${node.name}» експортовано як картинку`);
+      state.warnings.push(t(`Фон «${node.name}» експортовано як картинку`, `The background of “${node.name}” was exported as an image`));
       box.children.push(await rasterizeOwnLook(node, abs, state));
     }
   }
@@ -124,7 +125,8 @@ function gifImage(node: Exclude<ContainerLike, GroupNode>, gif: GifFill, state: 
   const assetId = `${node.id}:${state.assets.length}`;
   state.assets.push({ id: assetId, ext: 'gif', bytes: gif.bytes });
   if (gif.bytes.length > 150 * 1024) {
-    state.warnings.push(`«${node.name}»: анімований GIF важить ${Math.round(gif.bytes.length / 1024)} KB і не стискається автоматично.`);
+    const gifKb = Math.round(gif.bytes.length / 1024);
+    state.warnings.push(t(`«${node.name}»: анімований GIF важить ${gifKb} KB і не стискається автоматично.`, `“${node.name}”: the animated GIF is ${gifKb} KB and is not compressed automatically.`));
   }
   return {
     kind: 'image',
@@ -232,15 +234,15 @@ function serializeText(node: globalThis.TextNode, parentAbs: Matrix, abs: Matrix
 
 /** Why a node has to become an image, or null if it can be built from HTML/CSS. */
 function rasterReason(node: SceneNode): string | null {
-  if ('isMask' in node && node.isMask) return 'маска';
-  if ('children' in node && node.children.some((c) => 'isMask' in c && c.isMask)) return 'група з маскою';
-  if ('blendMode' in node && !isNormalBlend(node.blendMode)) return `режим накладання ${node.blendMode}`;
+  if ('isMask' in node && node.isMask) return t('маска', 'mask');
+  if ('children' in node && node.children.some((c) => 'isMask' in c && c.isMask)) return t('група з маскою', 'group with a mask');
+  if ('blendMode' in node && !isNormalBlend(node.blendMode)) return t(`режим накладання ${node.blendMode}`, `blend mode ${node.blendMode}`);
   if (node.type === 'TEXT') {
-    if (node.strokes.some((p) => p.visible !== false)) return 'обведення тексту';
-    if (node.effects.some((e) => e.visible)) return 'ефекти на тексті';
+    if (node.strokes.some((p) => p.visible !== false)) return t('обведення тексту', 'text stroke');
+    if (node.effects.some((e) => e.visible)) return t('ефекти на тексті', 'effects on text');
     const fills = node.getStyledTextSegments(['fills']).flatMap((s) => s.fills.filter((p) => p.visible !== false));
-    if (fills.some((p) => p.type !== 'SOLID')) return 'градієнт або картинка в тексті';
-    if (node.textAlignVertical !== 'TOP' && node.textAutoResize === 'TRUNCATE') return 'обрізаний текст';
+    if (fills.some((p) => p.type !== 'SOLID')) return t('градієнт або картинка в тексті', 'gradient or image in text');
+    if (node.textAlignVertical !== 'TOP' && node.textAutoResize === 'TRUNCATE') return t('обрізаний текст', 'truncated text');
   }
   return null;
 }

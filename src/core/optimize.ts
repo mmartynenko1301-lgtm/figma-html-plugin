@@ -1,4 +1,5 @@
 import type { Asset } from '../shared/ir';
+import { t } from '../shared/i18n';
 
 // Shrinks a banner until its ZIP fits the network limit. Each level is tried in
 // order and the first that fits wins, so images lose only as much quality as needed.
@@ -13,7 +14,13 @@ export interface OptimizeLevel {
 }
 
 export const LEVELS: OptimizeLevel[] = [
-  { jpegQuality: null, scale: 1, label: 'без стиснення' },
+  {
+    jpegQuality: null,
+    scale: 1,
+    get label() {
+      return t('без стиснення', 'no compression');
+    },
+  },
   { jpegQuality: 0.9, scale: 1, label: 'JPEG 90%, @2x' },
   { jpegQuality: 0.82, scale: 0.75, label: 'JPEG 82%, @1.5x' },
   { jpegQuality: 0.75, scale: 0.5, label: 'JPEG 75%, @1x' },

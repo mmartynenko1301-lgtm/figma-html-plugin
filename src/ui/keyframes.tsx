@@ -1,14 +1,15 @@
 import type { CustomAnim, Keyframe } from '../shared/anim';
 import { defaultKeyframe } from '../shared/anim';
 import { EasingField, NumberField } from './fields';
+import { t } from '../shared/i18n';
 
-const COLUMNS: { key: keyof Keyframe; label: string; title: string; step: number; min?: number; max?: number }[] = [
-  { key: 'at', label: '%', title: 'Момент циклу, %', step: 5, min: 0, max: 100 },
-  { key: 'x', label: 'X', title: 'Зсув по X, px', step: 2 },
-  { key: 'y', label: 'Y', title: 'Зсув по Y, px', step: 2 },
-  { key: 'scale', label: 'Масшт.', title: 'Масштаб', step: 0.05, min: 0 },
-  { key: 'rotate', label: 'Кут', title: 'Поворот, °', step: 5 },
-  { key: 'opacity', label: 'Непрозор.', title: 'Непрозорість, 0–1', step: 0.1, min: 0, max: 1 },
+const COLUMNS: { key: keyof Keyframe; label: [string, string]; title: [string, string]; step: number; min?: number; max?: number }[] = [
+  { key: 'at', label: ['%', '%'], title: ['Момент циклу, %', 'Point in the cycle, %'], step: 5, min: 0, max: 100 },
+  { key: 'x', label: ['X', 'X'], title: ['Зсув по X, px', 'X offset, px'], step: 2 },
+  { key: 'y', label: ['Y', 'Y'], title: ['Зсув по Y, px', 'Y offset, px'], step: 2 },
+  { key: 'scale', label: ['Масшт.', 'Scale'], title: ['Масштаб', 'Scale'], step: 0.05, min: 0 },
+  { key: 'rotate', label: ['Кут', 'Rot.'], title: ['Поворот, °', 'Rotation, °'], step: 5 },
+  { key: 'opacity', label: ['Непрозор.', 'Opacity'], title: ['Непрозорість, 0–1', 'Opacity, 0–1'], step: 0.1, min: 0, max: 1 },
 ];
 
 /** Timing and the table of keyframes for a layer's own keyframe animation. */
@@ -21,16 +22,16 @@ export function KeyframesBody(props: { value: CustomAnim; onChange: (custom: Cus
   return (
     <>
       <div class="grid">
-        <NumberField label="Старт, с" value={custom.delay} step={0.1} onChange={(v) => set({ delay: v })} />
-        <NumberField label="Цикл, с" value={custom.duration} step={0.1} min={0.05} onChange={(v) => set({ duration: v })} />
-        <EasingField label="Easing між кадрами" value={custom.easing} onChange={(easing) => set({ easing })} />
-        <NumberField label="Повторів (0 = до ліміту)" value={custom.repeat} step={1} onChange={(v) => set({ repeat: Math.round(v) })} />
+        <NumberField label={t('Старт, с', 'Start, s')} value={custom.delay} step={0.1} onChange={(v) => set({ delay: v })} />
+        <NumberField label={t('Цикл, с', 'Cycle, s')} value={custom.duration} step={0.1} min={0.05} onChange={(v) => set({ duration: v })} />
+        <EasingField label={t('Easing між кадрами', 'Easing between frames')} value={custom.easing} onChange={(easing) => set({ easing })} />
+        <NumberField label={t('Повторів (0 = до ліміту)', 'Repeats (0 = up to limit)')} value={custom.repeat} step={1} onChange={(v) => set({ repeat: Math.round(v) })} />
       </div>
       <table class="keyframes">
         <thead>
           <tr>
             {COLUMNS.map((c) => (
-              <th title={c.title}>{c.label}</th>
+              <th title={t(...c.title)}>{t(...c.label)}</th>
             ))}
             <th />
           </tr>
@@ -56,7 +57,7 @@ export function KeyframesBody(props: { value: CustomAnim; onChange: (custom: Cus
                 </td>
               ))}
               <td>
-                <button class="icon" title="Видалити кадр" disabled={custom.keyframes.length <= 1} onClick={() => set({ keyframes: custom.keyframes.filter((_, j) => j !== i) })}>
+                <button class="icon" title={t('Видалити кадр', 'Delete frame')} disabled={custom.keyframes.length <= 1} onClick={() => set({ keyframes: custom.keyframes.filter((_, j) => j !== i) })}>
                   ✕
                 </button>
               </td>
@@ -66,9 +67,9 @@ export function KeyframesBody(props: { value: CustomAnim; onChange: (custom: Cus
       </table>
       <div class="row between">
         <button class="link" onClick={() => set({ keyframes: withNewFrame(custom.keyframes) })}>
-          + Додати кадр
+          + {t('Додати кадр', 'Add frame')}
         </button>
-        <span class="muted small">Значення — зсув від макета</span>
+        <span class="muted small">{t('Значення — зсув від макета', 'Values are offsets from the layout')}</span>
       </div>
     </>
   );
