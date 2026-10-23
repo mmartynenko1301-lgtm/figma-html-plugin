@@ -301,7 +301,8 @@ function segmentRules(seg: TextSegment): string[] {
 
 function renderImage(node: ImageNode, ctx: Ctx, placed: boolean): string {
   const cls = nextClass(ctx);
-  ctx.css.push(`.${cls}{${[...placement(node, placed), ...common(node)].join(';')}}`);
+  const fit = node.fit ? [`object-fit:${node.fit}`] : [];
+  ctx.css.push(`.${cls}{${[...placement(node, placed), ...common(node), ...fit].join(';')}}`);
   const src = ctx.assetPaths.get(node.assetId);
   if (!src) throw new Error(`Missing asset ${node.assetId} for layer "${node.name}"`);
   return `<img class="${cls}" src="${src}" alt="" data-name="${escapeHtml(node.name)}">`;

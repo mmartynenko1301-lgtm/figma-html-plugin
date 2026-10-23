@@ -11,11 +11,30 @@ export interface Bar {
   end: number; // s
 }
 
-/** Seconds the timeline shows: the whole animation plus a little air, or 10 s for endless loops. */
+/**
+ * Seconds the timeline shows: everything up to the last intro, keyframe or outro,
+ * plus the first two cycles of each loop, so a loop running to the time limit
+ * does not squeeze the rest into a corner.
+ */
 export function timelineSpan(anims: LayerAnim[], maxDuration: number | null): number {
+  let end = 0;
+  for (const anim of anims) {
+    end = Math.max(end, introEnd(anim));
+    if (anim.outro) end = Math.max(end, anim.outro.at + anim.outro.duration);
+    if (anim.custom) {
+      const n = customIterations(anim.custom, maxDuration);
+      end = Math.max(end, anim.custom.delay + Math.min(n === 'infinite' ? 2 : n, 2) * anim.custom.duration);
+    }
+    if (anim.loop) end = Math.max(end, introEnd(anim) + anim.loop.delay + 2 * (anim.loop.duration + anim.loop.pause));
+  }
   const length = animationLength(anims, maxDuration);
-  if (length === 'infinite') return 10;
-  return Math.max(2, Math.ceil(length + 0.5));
+  const limit = length === 'infinite' ? Infinity : Math.max(length, 2);
+  return Math.max(2, Math.ceil(Math.min(end, limit) + 0.5));
+}
+
+/** Tick step in seconds so the axis has at most about six labels. */
+export function tickStep(span: number): number {
+  return [0.5, 1, 2, 5, 10].find((step) => span / step <= 6) ?? 20;
 }
 
 /** Bars of one layer's timed animations, clipped to `span`. Split-text intros are drawn as one piece. */

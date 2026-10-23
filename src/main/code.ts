@@ -9,7 +9,24 @@ const ANIM_KEY = 'anim';
 const SETTINGS_KEY = 'banner';
 const PRESETS_KEY = 'presets';
 
-figma.showUI(__html__, { width: 380, height: 680, themeColors: true });
+const SIZE_KEY = 'size';
+const DEFAULT_SIZE = { width: 400, height: 720 };
+
+figma.showUI(__html__, { ...DEFAULT_SIZE, themeColors: true });
+void figma.clientStorage.getAsync(SIZE_KEY).then((size: unknown) => {
+  if (isSize(size)) figma.ui.resize(size.width, size.height);
+});
+
+function isSize(v: unknown): v is { width: number; height: number } {
+  return !!v && typeof (v as { width: unknown }).width === 'number' && typeof (v as { height: unknown }).height === 'number';
+}
+
+function resize(width: number, height: number): void {
+  const w = Math.round(Math.min(1200, Math.max(340, width)));
+  const h = Math.round(Math.min(1400, Math.max(420, height)));
+  figma.ui.resize(w, h);
+  void figma.clientStorage.setAsync(SIZE_KEY, { width: w, height: h });
+}
 
 function post(message: MainMessage): void {
   figma.ui.postMessage(message);
@@ -157,6 +174,9 @@ figma.ui.onmessage = async (msg: UiMessage) => {
         break;
       case 'delete-preset':
         await deletePreset(msg.scope, msg.id);
+        break;
+      case 'resize':
+        resize(msg.width, msg.height);
         break;
       case 'close':
         figma.closePlugin();

@@ -6,7 +6,7 @@ import { LEVELS, fitToLimit, minifySvg, optimizeAssets } from '../src/core/optim
 import { defaultCustom, defaultIntro, defaultLoop, defaultOutro, emptyAnim, parseAnim, parsePresets } from '../src/shared/anim';
 import type { Asset } from '../src/shared/ir';
 import { withNewFrame } from '../src/ui/keyframes';
-import { layerBars, moveBar, timelineSpan } from '../src/ui/timeline-model';
+import { layerBars, moveBar, tickStep, timelineSpan } from '../src/ui/timeline-model';
 import { sampleBanner } from './fixtures';
 
 const opts = { maxDuration: 30, isText: false, pieces: 1, radius: null };
@@ -132,6 +132,24 @@ describe('timeline', () => {
     expect(bars[bars.length - 1]).toEqual({ kind: 'outro', start: 6, end: 6.5 });
     expect(moveBar(anim, 'intro', 0.33).intro!.delay).toBe(0.85);
     expect(moveBar(anim, 'outro', -10).outro!.at).toBe(0);
-    expect(timelineSpan([{ ...emptyAnim(), loop: defaultLoop('pulse') }], null)).toBe(10);
+    expect(timelineSpan([{ ...emptyAnim(), loop: defaultLoop('pulse') }], null)).toBe(6);
+    expect(tickStep(7)).toBe(2);
+    expect(tickStep(3)).toBe(0.5);
+  });
+});
+
+describe('gif', () => {
+  it('keeps GIF files as they are and sizes them like Figma', async () => {
+    const gif: Asset = { id: 'g', ext: 'gif', bytes: new Uint8Array(50000) };
+    const never: ImageCodec = { isOpaque: async () => true, encode: async () => { throw new Error('no re-encode'); } };
+    expect((await optimizeAssets([gif], LEVELS[4], never))[0]).toBe(gif);
+
+    const banner = sampleBanner();
+    banner.assets.push(gif);
+    banner.root.children.push({ kind: 'image', id: 'bg#gif', name: 'Bg', transform: [1, 0, 0, 1, 0, 0], width: 300, height: 250, opacity: 1, assetId: 'g', fit: 'cover' });
+    const { html, files } = generate(banner, { clickTag: 'x' });
+    const path = files.find((f) => f.path.endsWith('.gif'))!.path;
+    expect(html).toContain(`src="${path}"`);
+    expect(html).toMatch(/width:300px;height:250px;object-fit:cover/);
   });
 });

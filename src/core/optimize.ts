@@ -40,6 +40,11 @@ const MIN_BYTES = 2048;
 export async function optimizeAssets(assets: Asset[], level: OptimizeLevel, codec: ImageCodec): Promise<Asset[]> {
   const out: Asset[] = [];
   for (const asset of assets) {
+    // A canvas re-encode would keep only the first frame of an animated GIF.
+    if (asset.ext === 'gif') {
+      out.push(asset);
+      continue;
+    }
     if (asset.ext === 'svg') {
       out.push({ ...asset, bytes: minifySvg(asset.bytes) });
       continue;
