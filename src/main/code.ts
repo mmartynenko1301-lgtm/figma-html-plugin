@@ -9,8 +9,9 @@ const ANIM_KEY = 'anim';
 const SETTINGS_KEY = 'banner';
 const PRESETS_KEY = 'presets';
 
-const SIZE_KEY = 'size';
-const DEFAULT_SIZE = { width: 400, height: 720 };
+// A new key, so sizes saved for the old narrow single-column window are not reused.
+const SIZE_KEY = 'size-v2';
+const DEFAULT_SIZE = { width: 1120, height: 720 };
 
 figma.showUI(__html__, { ...DEFAULT_SIZE, themeColors: true });
 void figma.clientStorage.getAsync(SIZE_KEY).then((size: unknown) => {
@@ -22,8 +23,8 @@ function isSize(v: unknown): v is { width: number; height: number } {
 }
 
 function resize(width: number, height: number): void {
-  const w = Math.round(Math.min(1200, Math.max(340, width)));
-  const h = Math.round(Math.min(1400, Math.max(420, height)));
+  const w = Math.round(Math.min(2000, Math.max(760, width)));
+  const h = Math.round(Math.min(1400, Math.max(520, height)));
   figma.ui.resize(w, h);
   void figma.clientStorage.setAsync(SIZE_KEY, { width: w, height: h });
 }
