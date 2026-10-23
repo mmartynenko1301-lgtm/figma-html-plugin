@@ -1,5 +1,6 @@
 import type { BannerSettings, LayerAnim, Preset, PresetScope } from './anim';
 import type { Banner } from './ir';
+import type { Lang } from './i18n';
 
 export interface FrameInfo {
   id: string;
@@ -39,6 +40,8 @@ export type MainMessage =
       backup: Uint8Array | null;
     }
   | { type: 'presets'; file: Preset[]; mine: Preset[] }
+  /** Interface language saved for this user. */
+  | { type: 'lang'; lang: Lang }
   | { type: 'error'; message: string };
 
 export type BuildPurpose = 'preview' | 'export';
@@ -54,4 +57,5 @@ export type UiMessage =
   | { type: 'delete-preset'; scope: PresetScope; id: string }
   /** Resizes the plugin window; the size is remembered for next time. */
   | { type: 'resize'; width: number; height: number }
+  | { type: 'set-lang'; lang: Lang }
   | { type: 'close' };

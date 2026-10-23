@@ -1,67 +1,96 @@
 import type { Easing, HoverPreset, IntroPreset, LoopPreset, OutroPreset } from '../shared/anim';
+import { t } from '../shared/i18n';
 
-export const INTRO_LABELS: Record<IntroPreset, string> = {
-  fadeIn: 'Проявлення',
-  slideUp: 'Виїзд знизу',
-  slideDown: 'Виїзд згори',
-  slideLeft: 'Виїзд справа',
-  slideRight: 'Виїзд зліва',
-  scaleIn: 'Збільшення',
-  zoomOut: 'Зменшення',
-  revealRight: 'Відкриття зліва направо',
-  revealUp: 'Відкриття знизу вгору',
-  wordsUp: 'Текст по словах',
-  lettersFade: 'Текст по літерах',
-};
+type Texts = readonly [uk: string, en: string];
 
-export const LOOP_LABELS: Record<LoopPreset, string> = {
-  pulse: 'Пульсація',
-  shake: 'Тремтіння',
-  bounce: 'Підстрибування',
-  float: 'Плавання',
-  wiggle: 'Похитування',
-  shine: 'Відблиск',
-};
+function tr(texts: Texts): string {
+  return t(texts[0], texts[1]);
+}
 
-export const OUTRO_LABELS: Record<OutroPreset, string> = {
-  fadeOut: 'Зникнення',
-  slideOutUp: 'Виїзд угору',
-  slideOutDown: 'Виїзд униз',
-  slideOutLeft: 'Виїзд ліворуч',
-  slideOutRight: 'Виїзд праворуч',
-  zoomAway: 'Зменшення до зникнення',
-};
+/** A label map whose values follow the current interface language. */
+function localized<K extends string>(texts: Record<K, Texts>): Record<K, string> {
+  const out = {} as Record<K, string>;
+  for (const key of Object.keys(texts) as K[]) {
+    Object.defineProperty(out, key, { enumerable: true, get: () => tr(texts[key]) });
+  }
+  return out;
+}
 
-export const HOVER_LABELS: Record<HoverPreset, string> = {
-  grow: 'Збільшення',
-  shrink: 'Зменшення',
-  lift: 'Підйом',
-  brighten: 'Яскравість',
-};
+export const INTRO_LABELS = localized<IntroPreset>({
+  fadeIn: ['Проявлення', 'Fade in'],
+  slideUp: ['Виїзд знизу', 'Slide up'],
+  slideDown: ['Виїзд згори', 'Slide down'],
+  slideLeft: ['Виїзд справа', 'Slide in from right'],
+  slideRight: ['Виїзд зліва', 'Slide in from left'],
+  scaleIn: ['Збільшення', 'Scale up'],
+  zoomOut: ['Зменшення', 'Scale down'],
+  revealRight: ['Відкриття зліва направо', 'Wipe left to right'],
+  revealUp: ['Відкриття знизу вгору', 'Wipe bottom to top'],
+  wordsUp: ['Текст по словах', 'Text word by word'],
+  lettersFade: ['Текст по літерах', 'Text letter by letter'],
+});
 
-export const EASING_LABELS: Record<Easing, string> = {
-  easeOut: 'Плавне гальмування',
-  easeOutCubic: 'Гальмування (cubic)',
-  easeOutBack: 'З віддачею',
-  easeInOut: 'Плавно на старті й фініші',
-  easeIn: 'Розгін',
-  linear: 'Лінійно',
-};
+export const LOOP_LABELS = localized<LoopPreset>({
+  pulse: ['Пульсація', 'Pulse'],
+  shake: ['Тремтіння', 'Shake'],
+  bounce: ['Підстрибування', 'Bounce'],
+  float: ['Плавання', 'Float'],
+  wiggle: ['Похитування', 'Wiggle'],
+  shine: ['Відблиск', 'Shine'],
+});
+
+export const OUTRO_LABELS = localized<OutroPreset>({
+  fadeOut: ['Зникнення', 'Fade out'],
+  slideOutUp: ['Виїзд угору', 'Slide out up'],
+  slideOutDown: ['Виїзд униз', 'Slide out down'],
+  slideOutLeft: ['Виїзд ліворуч', 'Slide out left'],
+  slideOutRight: ['Виїзд праворуч', 'Slide out right'],
+  zoomAway: ['Зменшення до зникнення', 'Shrink away'],
+});
+
+export const HOVER_LABELS = localized<HoverPreset>({
+  grow: ['Збільшення', 'Grow'],
+  shrink: ['Зменшення', 'Shrink'],
+  lift: ['Підйом', 'Lift'],
+  brighten: ['Яскравість', 'Brighten'],
+});
+
+export const EASING_LABELS = localized<Easing>({
+  easeOut: ['Плавне гальмування', 'Ease out'],
+  easeOutCubic: ['Гальмування (cubic)', 'Ease out (cubic)'],
+  easeOutBack: ['З віддачею', 'Back out'],
+  easeInOut: ['Плавно на старті й фініші', 'Ease in-out'],
+  easeIn: ['Розгін', 'Ease in'],
+  linear: ['Лінійно', 'Linear'],
+});
+
+const DISTANCE: Texts = ['Відстань, px', 'Distance, px'];
+const SCALE: Texts = ['Масштаб', 'Scale'];
+const HEIGHT: Texts = ['Висота, px', 'Height, px'];
 
 export function introAmountLabel(preset: IntroPreset): string | null {
   if (preset === 'fadeIn' || preset === 'lettersFade' || preset.startsWith('reveal')) return null;
-  return preset === 'scaleIn' || preset === 'zoomOut' ? 'Початковий масштаб' : 'Відстань, px';
+  return tr(preset === 'scaleIn' || preset === 'zoomOut' ? ['Початковий масштаб', 'Start scale'] : DISTANCE);
 }
 
 export function loopAmountLabel(preset: LoopPreset): string {
-  return { pulse: 'Масштаб', shake: 'Амплітуда, px', bounce: 'Висота, px', float: 'Висота, px', wiggle: 'Кут, °', shine: 'Яскравість відблиску' }[preset];
+  const texts: Record<LoopPreset, Texts> = {
+    pulse: SCALE,
+    shake: ['Амплітуда, px', 'Amplitude, px'],
+    bounce: HEIGHT,
+    float: HEIGHT,
+    wiggle: ['Кут, °', 'Angle, °'],
+    shine: ['Яскравість відблиску', 'Shine strength'],
+  };
+  return tr(texts[preset]);
 }
 
 export function hoverAmountLabel(preset: HoverPreset): string {
-  return { grow: 'Масштаб', shrink: 'Масштаб', lift: 'Висота, px', brighten: 'Яскравість' }[preset];
+  const texts: Record<HoverPreset, Texts> = { grow: SCALE, shrink: SCALE, lift: HEIGHT, brighten: ['Яскравість', 'Brightness'] };
+  return tr(texts[preset]);
 }
 
 export function outroAmountLabel(preset: OutroPreset): string | null {
   if (preset === 'fadeOut') return null;
-  return preset === 'zoomAway' ? 'Кінцевий масштаб' : 'Відстань, px';
+  return tr(preset === 'zoomAway' ? ['Кінцевий масштаб', 'End scale'] : DISTANCE);
 }

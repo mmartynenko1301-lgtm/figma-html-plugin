@@ -2,6 +2,7 @@ import { useRef } from 'preact/hooks';
 import type { Easing } from '../shared/anim';
 import { EASINGS } from '../shared/anim';
 import { EASING_LABELS } from './labels';
+import { t } from '../shared/i18n';
 
 export function EasingField(props: { value: Easing; onChange: (e: Easing) => void; label?: string }) {
   return (
@@ -32,7 +33,7 @@ export function NumberField(props: { label: string; value: number; step: number;
     <label>
       <span
         class="scrub"
-        title="Тягніть ліворуч або праворуч, щоб змінити"
+        title={t('Тягніть ліворуч або праворуч, щоб змінити', 'Drag left or right to change')}
         onPointerDown={(e) => {
           (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
           scrub.current = { x: e.clientX, value: props.value };

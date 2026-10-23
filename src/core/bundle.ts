@@ -1,5 +1,6 @@
 import type { OutputFile } from './generate';
 import { escapeHtml } from './generate';
+import { t } from '../shared/i18n';
 
 export interface BundleItem {
   /** File-name base, e.g. "Spring_sale_300x250". Unique within the bundle. */
@@ -58,7 +59,7 @@ function previewPage(items: BundleItem[], title: string): string {
         '<figcaption>',
         `<strong>${escapeHtml(item.name)}</strong>`,
         `<span>${Math.round(item.width)}×${Math.round(item.height)} · ${kb} KB</span>`,
-        '<button type="button" onclick="var f=this.closest(\'figure\').querySelector(\'iframe\');f.src=f.src">↻ Програти</button>',
+        `<button type="button" onclick="var f=this.closest('figure').querySelector('iframe');f.src=f.src">↻ ${t('Програти', 'Replay')}</button>`,
         '</figcaption>',
         problems,
         '</figure>',

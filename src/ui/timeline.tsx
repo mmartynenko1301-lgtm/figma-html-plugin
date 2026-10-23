@@ -3,13 +3,20 @@ import type { LayerAnim } from '../shared/anim';
 import type { LayerInfo } from '../shared/messages';
 import type { BarKind } from './timeline-model';
 import { layerBars, moveBar, tickStep, timelineSpan } from './timeline-model';
+import { t } from '../shared/i18n';
 
-const BAR_TITLES: Record<BarKind, string> = {
-  intro: 'Поява: тягніть, щоб змінити затримку',
-  custom: 'Ключові кадри: тягніть, щоб змінити старт',
-  loop: 'Цикл: тягніть, щоб змінити старт',
-  outro: 'Зникнення: тягніть, щоб змінити момент',
-};
+function barTitle(kind: BarKind): string {
+  switch (kind) {
+    case 'intro':
+      return t('Поява: тягніть, щоб змінити затримку', 'Intro: drag to change the delay');
+    case 'custom':
+      return t('Ключові кадри: тягніть, щоб змінити старт', 'Keyframes: drag to change the start');
+    case 'loop':
+      return t('Цикл: тягніть, щоб змінити старт', 'Loop: drag to change the start');
+    case 'outro':
+      return t('Зникнення: тягніть, щоб змінити момент', 'Outro: drag to change the moment');
+  }
+}
 
 const LANE_ORDER: BarKind[] = ['intro', 'custom', 'loop', 'outro'];
 /** Lane height in px. */
@@ -76,7 +83,7 @@ export function LayerTimeline(props: {
     );
   const step = tickStep(span);
   const ticks = Array.from({ length: Math.floor(span / step) + 1 }, (_, i) => i * step);
-  const pct = (t: number) => `${(t / span) * 100}%`;
+  const pct = (s: number) => `${(s / span) * 100}%`;
   const head = Math.min(time, span);
 
   /** Pointer on the axis seeks the preview to that moment. */
@@ -110,44 +117,44 @@ export function LayerTimeline(props: {
   return (
     <div class="lt">
       <div class="lt-head">
-        <strong>Таймлайн</strong>
-        <span class={`lt-time${props.scrubbing ? ' paused' : ''}`}>{head.toFixed(2)} с</span>
+        <strong>{t('Таймлайн', 'Timeline')}</strong>
+        <span class={`lt-time${props.scrubbing ? ' paused' : ''}`}>{head.toFixed(2)} {t('с', 's')}</span>
         <span class="legend">
           <span class="dot intro" />
-          Поява
+          {t('Поява', 'Intro')}
           <span class="dot custom" />
-          Кадри
+          {t('Кадри', 'Keyframes')}
           <span class="dot loop" />
-          Цикл
+          {t('Цикл', 'Loop')}
           <span class="dot hover" />
           Hover
           <span class="dot outro" />
-          Зникнення
+          {t('Зникнення', 'Outro')}
         </span>
-        <button class="ghost small" onClick={props.onStagger} disabled={!layers.some((l) => l.anim?.intro)} title="Затримки появи 0, 0.25, 0.5 с… у порядку шарів">
-          Появи по черзі
+        <button class="ghost small" onClick={props.onStagger} disabled={!layers.some((l) => l.anim?.intro)} title={t('Затримки появи 0, 0.25, 0.5 с… у порядку шарів', 'Intro delays 0, 0.25, 0.5 s… in layer order')}>
+          {t('Появи по черзі', 'Stagger intros')}
         </button>
       </div>
       <div class="lt-row lt-axis">
-        <span class="lt-name muted small">{drag ? dragLabel(drag) : 'Шари'}</span>
+        <span class="lt-name muted small">{drag ? dragLabel(drag) : t('Шари', 'Layers')}</span>
         <div
           class="lt-track"
-          title="Тягніть, щоб перемотати превʼю"
+          title={t('Тягніть, щоб перемотати превʼю', 'Drag to scrub the preview')}
           onPointerDown={(e) => {
             (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
             seek(e);
           }}
           onPointerMove={(e) => (e.currentTarget as HTMLElement).hasPointerCapture(e.pointerId) && seek(e)}
         >
-          {ticks.map((t) => (
-            <span class="lt-tick" style={{ left: pct(t) }}>
-              {t === 0 ? '0 с' : t}
+          {ticks.map((tick) => (
+            <span class="lt-tick" style={{ left: pct(tick) }}>
+              {tick === 0 ? t('0 с', '0 s') : tick}
             </span>
           ))}
           <span class="lt-knob" style={{ left: pct(head) }} />
         </div>
       </div>
-      {layers.length === 0 && <p class="muted lt-empty">У фреймі немає шарів.</p>}
+      {layers.length === 0 && <p class="muted lt-empty">{t('У фреймі немає шарів.', 'The frame has no layers.')}</p>}
       <div class="lt-body">
         {layers.map((layer) => {
           const anim = animOf(layer);
@@ -161,13 +168,13 @@ export function LayerTimeline(props: {
               class={`lt-row${selected ? ' selected' : ''}`}
               style={{ minHeight: `${Math.max(28, lanes.length * LANE + 10)}px` }}
               onClick={() => props.onSelect(layer.id)}
-              title={lost ? 'Шар увійшов у растрове зображення батьківського шару, тому його анімація не застосується' : layer.name}
+              title={lost ? t('Шар увійшов у растрове зображення батьківського шару, тому його анімація не застосується', 'The layer became part of its parent’s raster image, so its animation will not apply') : layer.name}
             >
               <span class="lt-name" style={{ paddingLeft: `${layer.depth * 10}px` }}>
                 <span class="lt-icon">{TYPE_ICONS[layer.type] ?? '•'}</span>
                 <span class="lt-label">{layer.name}</span>
-                {anim?.hover && <span class="lt-hover" title="Є hover-ефект" />}
-                {lost && <span class="badge warn">растр</span>}
+                {anim?.hover && <span class="lt-hover" title={t('Є hover-ефект', 'Has a hover effect')} />}
+                {lost && <span class="badge warn">{t('растр', 'raster')}</span>}
               </span>
               <div class="lt-track">
                 {bars.map((bar) => (
@@ -179,7 +186,7 @@ export function LayerTimeline(props: {
                       top: lanes.length === 1 ? `calc(50% - ${(LANE - 2) / 2}px)` : `${5 + lanes.indexOf(bar.kind) * LANE}px`,
                       height: `${LANE - 2}px`,
                     }}
-                    title={`${BAR_TITLES[bar.kind]} (${round(bar.start)}–${round(bar.end)} с)`}
+                    title={`${barTitle(bar.kind)} (${round(bar.start)}–${round(bar.end)} ${t('с', 's')})`}
                     onClick={(e) => e.stopPropagation()}
                     onPointerDown={(e) => onDown(e, layer.id, bar.kind, anim!)}
                     onPointerMove={onMove}
@@ -202,13 +209,13 @@ function dragLabel(d: Drag): string {
   const a = d.current;
   switch (d.kind) {
     case 'intro':
-      return `Затримка ${a.intro?.delay ?? 0} с`;
+      return t(`Затримка ${a.intro?.delay ?? 0} с`, `Delay ${a.intro?.delay ?? 0} s`);
     case 'custom':
-      return `Старт ${a.custom?.delay ?? 0} с`;
+      return t(`Старт ${a.custom?.delay ?? 0} с`, `Start ${a.custom?.delay ?? 0} s`);
     case 'loop':
-      return `Після появи ${a.loop?.delay ?? 0} с`;
+      return t(`Після появи ${a.loop?.delay ?? 0} с`, `After intro ${a.loop?.delay ?? 0} s`);
     case 'outro':
-      return `Зникнення ${a.outro?.at ?? 0} с`;
+      return t(`Зникнення ${a.outro?.at ?? 0} с`, `Outro at ${a.outro?.at ?? 0} s`);
   }
 }
 

@@ -1,4 +1,5 @@
 import type { NetworkId } from '../shared/anim';
+import { t } from '../shared/i18n';
 
 /** How the banner is packaged and how clicks reach the network. */
 export type Platform = 'standard' | 'adform' | 'admixer';
@@ -34,7 +35,9 @@ export const NETWORKS: Record<NetworkId, NetworkProfile> = {
     maxFiles: 40,
     maxDuration: 30,
     sizes: GOOGLE_ADS_SIZES,
-    note: 'Посилання задається в кабінеті Google Ads; clickTag у файлі лишається як запасний.',
+    get note() {
+      return t('Посилання задається в кабінеті Google Ads; clickTag у файлі лишається як запасний.', 'The link is set in Google Ads; the clickTag in the file is a fallback.');
+    },
   },
   'google-dv': {
     id: 'google-dv',
@@ -44,7 +47,12 @@ export const NETWORKS: Record<NetworkId, NetworkProfile> = {
     maxFiles: null,
     maxDuration: 30,
     sizes: null,
-    note: 'Мережа підставляє clickTag сама. Ліміт 150 KB — типовий для початкового завантаження; уточніть у медіаплані.',
+    get note() {
+      return t(
+        'Мережа підставляє clickTag сама. Ліміт 150 KB — типовий для початкового завантаження; уточніть у медіаплані.',
+        'The network fills in clickTag itself. 150 KB is the usual initial load limit; check your media plan.',
+      );
+    },
   },
   // https://support.adform.com/documentation/coty-manuals-old/building-banners-for-use-in-adform/manually-creating-manifestjson/
   adform: {
@@ -55,7 +63,12 @@ export const NETWORKS: Record<NetworkId, NetworkProfile> = {
     maxFiles: null,
     maxDuration: 30,
     sizes: null,
-    note: 'У ZIP додається manifest.json, клік іде через clickTAG з Adform.DHTML.js. Ліміт ваги задає майданчик; Adform рахує вагу розпакованих файлів.',
+    get note() {
+      return t(
+        'У ZIP додається manifest.json, клік іде через clickTAG з Adform.DHTML.js. Ліміт ваги задає майданчик; Adform рахує вагу розпакованих файлів.',
+        'The ZIP gets a manifest.json and clicks go through clickTAG from Adform.DHTML.js. The size limit is set by the placement; Adform counts unzipped files.',
+      );
+    },
   },
   // https://helpcenter.admixer.com/overview/standard-api-2-0-html5
   admixer: {
@@ -66,27 +79,40 @@ export const NETWORKS: Record<NetworkId, NetworkProfile> = {
     maxFiles: null,
     maxDuration: 30,
     sizes: null,
-    note: 'Головний файл — body.html, клік іде через globalHTML5Api.click(), посилання задається в кабінеті Admixer. Ліміт 300 KB взято з довідки Admixer, уточніть для вашої кампанії.',
+    get note() {
+      return t(
+        'Головний файл — body.html, клік іде через globalHTML5Api.click(), посилання задається в кабінеті Admixer. Ліміт 300 KB взято з довідки Admixer, уточніть для вашої кампанії.',
+        'The main file is body.html, clicks go through globalHTML5Api.click() and the link is set in Admixer. The 300 KB limit comes from the Admixer docs; check it for your campaign.',
+      );
+    },
   },
   iab: {
     id: 'iab',
-    label: 'IAB (загальний)',
+    get label() {
+      return t('IAB (загальний)', 'IAB (generic)');
+    },
     platform: 'standard',
     maxKb: 150,
     maxFiles: null,
     maxDuration: 30,
     sizes: null,
-    note: 'Типові вимоги IAB; конкретний майданчик може мати свої.',
+    get note() {
+      return t('Типові вимоги IAB; конкретний майданчик може мати свої.', 'Typical IAB requirements; a placement may have its own.');
+    },
   },
   none: {
     id: 'none',
-    label: 'Без обмежень',
+    get label() {
+      return t('Без обмежень', 'No limits');
+    },
     platform: 'standard',
     maxKb: null,
     maxFiles: null,
     maxDuration: null,
     sizes: null,
-    note: 'Для сайту, превʼю або тестів. Циклічні анімації тривають нескінченно.',
+    get note() {
+      return t('Для сайту, превʼю або тестів. Циклічні анімації тривають нескінченно.', 'For a website, previews or tests. Loops run forever.');
+    },
   },
 };
 
@@ -102,14 +128,14 @@ export function validate(network: NetworkProfile, input: ValidationInput): strin
   const problems: string[] = [];
   const kb = input.zipBytes / 1024;
   if (network.maxKb !== null && kb > network.maxKb) {
-    problems.push(`ZIP важить ${kb.toFixed(1)} KB, а ${network.label} дозволяє до ${network.maxKb} KB.`);
+    problems.push(t(`ZIP важить ${kb.toFixed(1)} KB, а ${network.label} дозволяє до ${network.maxKb} KB.`, `The ZIP is ${kb.toFixed(1)} KB but ${network.label} allows up to ${network.maxKb} KB.`));
   }
   if (network.maxFiles !== null && input.fileCount > network.maxFiles) {
-    problems.push(`У ZIP ${input.fileCount} файлів, а ${network.label} дозволяє до ${network.maxFiles}.`);
+    problems.push(t(`У ZIP ${input.fileCount} файлів, а ${network.label} дозволяє до ${network.maxFiles}.`, `The ZIP has ${input.fileCount} files but ${network.label} allows up to ${network.maxFiles}.`));
   }
   const size = `${Math.round(input.width)}x${Math.round(input.height)}`;
   if (network.sizes && !network.sizes.includes(size)) {
-    problems.push(`Розмір ${size.replace('x', '×')} не входить до дозволених розмірів ${network.label}.`);
+    problems.push(t(`Розмір ${size.replace('x', '×')} не входить до дозволених розмірів ${network.label}.`, `Size ${size.replace('x', '×')} is not among the sizes ${network.label} accepts.`));
   }
   return problems;
 }

@@ -16,6 +16,8 @@ import { download, previewHtml, slug, zipFiles } from './package';
 import { Presets } from './presets';
 import { LayerTimeline } from './timeline';
 import { timelineSpan } from './timeline-model';
+import type { Lang } from '../shared/i18n';
+import { getLang, setLang, t } from '../shared/i18n';
 
 function send(message: UiMessage): void {
   parent.postMessage({ pluginMessage: message }, '*');
@@ -67,6 +69,7 @@ function App() {
     }
   });
   const [lastExport, setLastExport] = useState<ExportResult[] | null>(null);
+  const [lang, setLangState] = useState<Lang>(getLang());
   const [zoom, setZoom] = useState<Zoom>('fit');
   const [seek, setSeek] = useState<number | null>(null);
   const [time, setTime] = useState(0);
@@ -134,7 +137,7 @@ function App() {
   }
 
   async function refreshPreview(frameId: string) {
-    setBusy('Готую превʼю…');
+    setBusy(previewBusy());
     try {
       const r = await requestBuild(frameId, 'preview');
       // Ignore a late answer for a frame the user has already left.
@@ -169,6 +172,9 @@ function App() {
         const waiter = pending.current.get(key);
         pending.current.delete(key);
         waiter?.resolve({ banner: msg.banner, warnings: msg.warnings, anims: msg.anims, backup: msg.backup });
+      } else if (msg.type === 'lang') {
+        setLang(msg.lang);
+        setLangState(msg.lang);
       } else if (msg.type === 'presets') {
         setPresets({ file: msg.file, mine: msg.mine });
       } else if (msg.type === 'error') {
@@ -189,6 +195,12 @@ function App() {
   const network = NETWORKS[settings?.network ?? 'google-ads'];
   const length = animationLength(Object.values(anims), network.maxDuration);
   spanRef.current = timelineSpan(Object.values(anims), network.maxDuration);
+
+  function changeLang(next: Lang) {
+    setLang(next);
+    setLangState(next);
+    send({ type: 'set-lang', lang: next });
+  }
 
   function updateAnim(id: string, anim: LayerAnim | null) {
     const stored = isEmptyAnim(anim) ? null : anim;
@@ -228,7 +240,7 @@ function App() {
     try {
       const bases = uniqueBases(frames.map((f) => `${slug(f.name)}_${f.width}x${f.height}`));
       for (const [i, f] of frames.entries()) {
-        setBusy(frames.length > 1 ? `Експортую ${i + 1} з ${frames.length}: ${f.name}` : 'Експортую…');
+        setBusy(frames.length > 1 ? t(`Експортую ${i + 1} з ${frames.length}: ${f.name}`, `Exporting ${i + 1} of ${frames.length}: ${f.name}`) : t('Експортую…', 'Exporting…'));
         const r = await requestBuild(f.id, 'export', settings.backup);
         // The edited frame uses the panel's state; other frames use what is stored on their layers.
         const frameAnims = f.id === frame?.id ? anims : r.anims;
@@ -255,7 +267,9 @@ function App() {
         });
         const prefix = frames.length > 1 ? `${f.name}: ` : '';
         if (fitted.level > 0) {
-          notesOut.push(`${prefix}Картинки стиснуто (${LEVELS[fitted.level].label}), щоб вміститися в ${net.maxKb} KB.`);
+          notesOut.push(
+            prefix + t(`Картинки стиснуто (${LEVELS[fitted.level].label}), щоб вміститися в ${net.maxKb} KB.`, `Images compressed (${LEVELS[fitted.level].label}) to fit ${net.maxKb} KB.`),
+          );
         }
         notesOut.push(...[...problems, ...gen.warnings, ...r.warnings].map((n) => prefix + n));
       }
@@ -279,7 +293,7 @@ function App() {
       );
       if (items.some((item) => item.problems.length > 0)) setTab('export');
       setStatus({
-        text: `Готово: банерів ${items.length}, ${totalKb.toFixed(1)} KB.`,
+        text: t(`Готово: банерів ${items.length}, ${totalKb.toFixed(1)} KB.`, `Done: ${items.length} banners, ${totalKb.toFixed(1)} KB.`),
         error: items.some((item) => item.problems.length > 0),
       });
     } catch (err) {
@@ -298,11 +312,12 @@ function App() {
           </div>
           <h1>Banner Export</h1>
           <ol>
-            <li>Виділіть фрейм банера або будь-який шар у ньому.</li>
-            <li>Додайте шарам анімації або застосуйте пресет.</li>
-            <li>Виберіть мережу та експортуйте ZIP.</li>
+            <li>{t('Виділіть фрейм банера або будь-який шар у ньому.', 'Select a banner frame or any layer in it.')}</li>
+            <li>{t('Додайте шарам анімації або застосуйте пресет.', 'Add animations to layers or apply a preset.')}</li>
+            <li>{t('Виберіть мережу та експортуйте ZIP.', 'Pick a network and export the ZIP.')}</li>
           </ol>
-          <p class="muted small">Щоб експортувати кілька розмірів разом, виділіть кілька фреймів.</p>
+          <p class="muted small">{t('Щоб експортувати кілька розмірів разом, виділіть кілька фреймів.', 'To export several sizes together, select several frames.')}</p>
+          <LangSwitch lang={lang} onChange={changeLang} />
         </div>
         <ResizeHandle />
       </div>
@@ -332,39 +347,40 @@ function App() {
               <h1 title={frame.name}>{frame.name}</h1>
               <span class="muted small">
                 {frame.width} × {frame.height}
-                {frames.length > 1 && frameIndex >= 0 ? ` · ${frameIndex + 1} з ${frames.length} фреймів` : ''}
+                {frames.length > 1 && frameIndex >= 0 ? t(` · ${frameIndex + 1} з ${frames.length} фреймів`, ` · ${frameIndex + 1} of ${frames.length} frames`) : ''}
               </span>
             </div>
           </div>
           <div class="stage-actions">
-            <button class="btn primary" onClick={play} disabled={!built} title="Програти анімацію спочатку">
-              <Icon name="play" /> Програти
+            <button class="btn primary" onClick={play} disabled={!built} title={t('Програти анімацію спочатку', 'Play the animation from the start')}>
+              <Icon name="play" /> {t('Програти', 'Play')}
             </button>
-            <button class="btn" onClick={() => void refreshPreview(frame.id)} disabled={!!busy} title="Перечитати макет з Figma">
-              <Icon name="refresh" /> Оновити
+            <button class="btn" onClick={() => void refreshPreview(frame.id)} disabled={!!busy} title={t('Перечитати макет з Figma', 'Re-read the layout from Figma')}>
+              <Icon name="refresh" /> {t('Оновити', 'Refresh')}
             </button>
-            <select class="zoom" value={zoom} onChange={(e) => setZoom(e.currentTarget.value as Zoom)} title="Масштаб превʼю">
+            <select class="zoom" value={zoom} onChange={(e) => setZoom(e.currentTarget.value as Zoom)} title={t('Масштаб превʼю', 'Preview zoom')}>
               <option value="fit">Fit</option>
               <option value="0.5">50%</option>
               <option value="1">100%</option>
               <option value="2">200%</option>
             </select>
+            <LangSwitch lang={lang} onChange={changeLang} />
           </div>
         </div>
         <div class="viewport">
           <Preview built={built} anims={anims} settings={settings} replay={replay} busy={busy} zoom={zoom} seek={seek} onPlay={startClock} />
           <div class="badges">
-            <span class={`badge${overTime ? ' bad' : ''}`} title="Тривалість анімації і ліміт мережі">
-              {length === 'infinite' ? '∞' : `${length} с`}
-              {network.maxDuration !== null ? ` / ${network.maxDuration} с` : ''}
+            <span class={`badge${overTime ? ' bad' : ''}`} title={t('Тривалість анімації і ліміт мережі', 'Animation length and network limit')}>
+              {length === 'infinite' ? '∞' : `${length} ${t('с', 's')}`}
+              {network.maxDuration !== null ? ` / ${network.maxDuration} ${t('с', 's')}` : ''}
             </span>
             {exported && (
-              <span class={`badge${exported.maxKb !== null && exported.kb > exported.maxKb ? ' bad' : ''}`} title="Вага ZIP після останнього експорту">
+              <span class={`badge${exported.maxKb !== null && exported.kb > exported.maxKb ? ' bad' : ''}`} title={t('Вага ZIP після останнього експорту', 'ZIP size after the last export')}>
                 <span class={`dot ${exported.maxKb !== null && exported.kb > exported.maxKb ? 'outro' : 'loop'}`} />
                 {exported.kb.toFixed(0)} KB{exported.maxKb !== null ? ` / ${exported.maxKb} KB` : ''}
               </span>
             )}
-            <button class="badge" title="Мережа для експорту" onClick={() => setTab('export')}>
+            <button class="badge" title={t('Мережа для експорту', 'Network to export for')} onClick={() => setTab('export')}>
               {network.label}
             </button>
           </div>
@@ -390,9 +406,9 @@ function App() {
         <nav class="segmented tabs">
           {(
             [
-              ['anim', 'Анімація'],
-              ['presets', 'Пресети'],
-              ['export', 'Експорт'],
+              ['anim', t('Анімація', 'Animation')],
+              ['presets', t('Пресети', 'Presets')],
+              ['export', t('Експорт', 'Export')],
             ] as const
           ).map(([id, label]) => (
             <button class={tab === id ? 'on' : ''} onClick={() => setTab(id)}>
@@ -414,12 +430,12 @@ function App() {
                 onCopy={() => {
                   if (!selected.anim) return;
                   setClipboard(structuredCloneAnim(selected.anim));
-                  setStatus({ text: `Анімацію «${selected.name}» скопійовано.` });
+                  setStatus({ text: t(`Анімацію «${selected.name}» скопійовано.`, `Animation of “${selected.name}” copied.`) });
                 }}
                 onPaste={() => clipboard && applyToSelected(clipboard)}
               />
             ) : (
-              <p class="hint">Клацніть шар на таймлайні або на полотні, щоб додати йому анімацію.</p>
+              <p class="hint">{t('Клацніть шар на таймлайні або на полотні, щоб додати йому анімацію.', 'Click a layer in the timeline or on the canvas to animate it.')}</p>
             ))}
 
           {tab === 'presets' && (
@@ -429,7 +445,12 @@ function App() {
               selectedCount={selectedIds.length}
               onApply={(anim, name) => {
                 applyToSelected(anim);
-                setStatus({ text: `Пресет «${name}» застосовано${selectedIds.length > 1 ? ` до ${selectedIds.length} шарів` : ''}.` });
+                setStatus({
+                  text: t(
+                    `Пресет «${name}» застосовано${selectedIds.length > 1 ? ` до ${selectedIds.length} шарів` : ''}.`,
+                    `Preset “${name}” applied${selectedIds.length > 1 ? ` to ${selectedIds.length} layers` : ''}.`,
+                  ),
+                });
               }}
               send={send}
               onStatus={(text, error) => setStatus({ text, error })}
@@ -438,9 +459,9 @@ function App() {
 
           {tab === 'export' && (
             <section class="export">
-              <h3>Мережа</h3>
+              <h3>{t('Мережа', 'Network')}</h3>
               <label class="field">
-                <span>Мережа</span>
+                <span>{t('Мережа', 'Network')}</span>
                 <select value={settings.network} onChange={(e) => updateSettings({ network: e.currentTarget.value as NetworkId })}>
                   {Object.values(NETWORKS).map((n) => (
                     <option value={n.id}>{n.label}</option>
@@ -453,32 +474,35 @@ function App() {
               </label>
               <label class="check">
                 <input type="checkbox" checked={settings.backup} onChange={(e) => updateSettings({ backup: e.currentTarget.checked })} />
-                Додати backup JPG
+                {t('Додати backup JPG', 'Add backup JPG')}
               </label>
               <label class="check">
                 <input type="checkbox" checked={settings.optimize} onChange={(e) => updateSettings({ optimize: e.currentTarget.checked })} />
-                Стискати картинки під ліміт
+                {t('Стискати картинки під ліміт', 'Compress images to fit the limit')}
               </label>
 
               <hr />
-              <h3>Ліміти</h3>
+              <h3>{t('Ліміти', 'Limits')}</h3>
               <dl class="facts">
-                <dt>Вага ZIP</dt>
-                <dd>{network.maxKb === null ? 'без ліміту' : `≤ ${network.maxKb} KB`}</dd>
-                <dt>Тривалість</dt>
-                <dd>{network.maxDuration === null ? 'без ліміту' : `≤ ${network.maxDuration} с`}</dd>
+                <dt>{t('Вага ZIP', 'ZIP size')}</dt>
+                <dd>{network.maxKb === null ? t('без ліміту', 'no limit') : `≤ ${network.maxKb} KB`}</dd>
+                <dt>{t('Тривалість', 'Duration')}</dt>
+                <dd>{network.maxDuration === null ? t('без ліміту', 'no limit') : `≤ ${network.maxDuration} ${t('с', 's')}`}</dd>
               </dl>
               {network.note && <p class="muted small">{network.note}</p>}
               {frames.length > 1 && (
                 <p class="muted small">
-                  Виділено фреймів: {frames.length}. Мережа, посилання і backup беруться з поточного фрейму, анімації — з кожного фрейму свої.
+                  {t(
+                    `Виділено фреймів: ${frames.length}. Мережа, посилання і backup беруться з поточного фрейму, анімації — з кожного фрейму свої.`,
+                    `${frames.length} frames selected. Network, link and backup come from the current frame; each frame keeps its own animations.`,
+                  )}
                 </p>
               )}
 
               {lastExport && (
                 <>
                   <hr />
-                  <h3>Останній експорт</h3>
+                  <h3>{t('Останній експорт', 'Last export')}</h3>
                   {lastExport.map((item) => (
                     <div class="result">
                       <div class="row between">
@@ -491,7 +515,7 @@ function App() {
                         </div>
                       )}
                       <span class={`small ${item.maxKb !== null && item.kb > item.maxKb ? 'error' : 'ok'}`}>
-                        {item.kb.toFixed(1)} KB{item.maxKb !== null ? ` з ${item.maxKb} KB` : ''}
+                        {item.kb.toFixed(1)} KB{item.maxKb !== null ? t(` з ${item.maxKb} KB`, ` of ${item.maxKb} KB`) : ''}
                       </span>
                       {item.problems.map((p) => (
                         <p class="error small">{p}</p>
@@ -513,18 +537,18 @@ function App() {
 
         <footer>
           {status ? (
-            <p class={`status ${status.error ? 'error' : ''}`} onClick={() => setStatus(null)} title="Сховати">
+            <p class={`status ${status.error ? 'error' : ''}`} onClick={() => setStatus(null)} title={t('Сховати', 'Hide')}>
               {status.text}
             </p>
           ) : (
             <span class="status idle">
               <span class="dot loop" />
-              {frames.length > 1 ? `Фреймів: ${frames.length}` : 'Збережено у файлі'}
+              {frames.length > 1 ? t(`Фреймів: ${frames.length}`, `Frames: ${frames.length}`) : t('Збережено у файлі', 'Saved in the file')}
             </span>
           )}
           <button class="btn primary" onClick={() => void exportAll()} disabled={!!busy}>
             <Icon name="download" />
-            {busy && busy.startsWith('Експорт') ? busy : frames.length > 1 ? `Експортувати всі (${frames.length})` : 'Експортувати'}
+            {busy && busy !== previewBusy() ? busy : frames.length > 1 ? t(`Експортувати всі (${frames.length})`, `Export all (${frames.length})`) : t('Експортувати', 'Export')}
           </button>
         </footer>
       </aside>
@@ -534,6 +558,21 @@ function App() {
 }
 
 type Zoom = 'fit' | '0.5' | '1' | '2';
+
+const previewBusy = () => t('Готую превʼю…', 'Preparing preview…');
+
+/** UA / EN switch; the choice is remembered by the main thread. */
+function LangSwitch(props: { lang: Lang; onChange: (lang: Lang) => void }) {
+  return (
+    <div class="segmented lang" title={t('Мова інтерфейсу', 'Interface language')}>
+      {(['uk', 'en'] as const).map((l) => (
+        <button class={props.lang === l ? 'on' : ''} onClick={() => props.onChange(l)}>
+          {l === 'uk' ? 'UA' : 'EN'}
+        </button>
+      ))}
+    </div>
+  );
+}
 
 const ICONS = {
   play: <path d="M7 5v14l11-7z" fill="currentColor" stroke="none" />,
@@ -557,7 +596,7 @@ function Splitter(props: { height: number; onChange: (h: number) => void }) {
   return (
     <div
       class="splitter"
-      title="Тягніть, щоб змінити висоту таймлайну"
+      title={t('Тягніть, щоб змінити висоту таймлайну', 'Drag to change the timeline height')}
       onPointerDown={(e) => {
         (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
         start.current = { y: e.clientY, h: props.height };
@@ -579,7 +618,7 @@ function ResizeHandle() {
   return (
     <div
       class="resize"
-      title="Змінити розмір вікна"
+      title={t('Змінити розмір вікна', 'Resize the window')}
       onPointerDown={(e) => {
         (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
         start.current = { x: e.screenX, y: e.screenY, w: window.innerWidth, h: window.innerHeight };
@@ -656,7 +695,7 @@ function Preview(props: {
     return () => observer.disconnect();
   }, [!!built]);
 
-  if (!built) return <div class="preview empty muted">{busy ?? 'Немає превʼю'}</div>;
+  if (!built) return <div class="preview empty muted">{busy ?? t('Немає превʼю', 'No preview')}</div>;
   const { width, height } = built.banner;
   // Room is left for the badges along the bottom edge.
   const scale = zoom === 'fit' ? Math.min(2, (box.width - 48) / width, (box.height - 80) / height) : Number(zoom);
