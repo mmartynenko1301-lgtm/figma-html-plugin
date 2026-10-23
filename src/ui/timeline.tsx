@@ -13,7 +13,7 @@ const BAR_TITLES: Record<BarKind, string> = {
 
 const LANE_ORDER: BarKind[] = ['intro', 'custom', 'loop', 'outro'];
 /** Lane height in px. */
-const LANE = 7;
+const LANE = 9;
 
 const TYPE_ICONS: Partial<Record<NodeType, string>> = {
   TEXT: 'T',
@@ -53,16 +53,19 @@ export function LayerTimeline(props: {
   selectedIds: string[];
   /** Layer ids present in the built banner; animated layers missing from it were merged into a raster image. */
   ids: Set<string> | null;
-  replay: number;
+  /** Preview time in seconds, shown by the playhead. */
+  time: number;
+  scrubbing: boolean;
+  onScrub: (t: number) => void;
+  onStagger: () => void;
   onSelect: (id: string) => void;
   onChange: (id: string, anim: LayerAnim) => void;
 }) {
-  const { layers, maxDuration, selectedIds, ids } = props;
+  const { layers, maxDuration, selectedIds, ids, time } = props;
   const [drag, setDrag] = useState<Drag | null>(null);
   const dragRef = useRef<Drag | null>(null);
   dragRef.current = drag;
 
-  if (layers.length === 0) return <p class="muted">У фреймі немає шарів.</p>;
 
   const animOf = (l: LayerInfo) => (drag?.id === l.id ? drag.current : l.anim);
   const span =
@@ -74,6 +77,14 @@ export function LayerTimeline(props: {
   const step = tickStep(span);
   const ticks = Array.from({ length: Math.floor(span / step) + 1 }, (_, i) => i * step);
   const pct = (t: number) => `${(t / span) * 100}%`;
+  const head = Math.min(time, span);
+
+  /** Pointer on the axis seeks the preview to that moment. */
+  const seek = (e: PointerEvent) => {
+    const track = e.currentTarget as HTMLElement;
+    const box = track.getBoundingClientRect();
+    props.onScrub(Math.round(Math.min(span, Math.max(0, ((e.clientX - box.left) / box.width) * span)) * 100) / 100);
+  };
 
   const onDown = (e: PointerEvent, id: string, kind: BarKind, anim: LayerAnim) => {
     const track = (e.currentTarget as HTMLElement).parentElement!;
@@ -98,16 +109,45 @@ export function LayerTimeline(props: {
 
   return (
     <div class="lt">
+      <div class="lt-head">
+        <strong>Таймлайн</strong>
+        <span class={`lt-time${props.scrubbing ? ' paused' : ''}`}>{head.toFixed(2)} с</span>
+        <span class="legend">
+          <span class="dot intro" />
+          Поява
+          <span class="dot custom" />
+          Кадри
+          <span class="dot loop" />
+          Цикл
+          <span class="dot hover" />
+          Hover
+          <span class="dot outro" />
+          Зникнення
+        </span>
+        <button class="ghost small" onClick={props.onStagger} disabled={!layers.some((l) => l.anim?.intro)} title="Затримки появи 0, 0.25, 0.5 с… у порядку шарів">
+          Появи по черзі
+        </button>
+      </div>
       <div class="lt-row lt-axis">
-        <span class="lt-name muted small">{drag ? dragLabel(drag) : 'Шар'}</span>
-        <div class="lt-track">
+        <span class="lt-name muted small">{drag ? dragLabel(drag) : 'Шари'}</span>
+        <div
+          class="lt-track"
+          title="Тягніть, щоб перемотати превʼю"
+          onPointerDown={(e) => {
+            (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+            seek(e);
+          }}
+          onPointerMove={(e) => (e.currentTarget as HTMLElement).hasPointerCapture(e.pointerId) && seek(e)}
+        >
           {ticks.map((t) => (
             <span class="lt-tick" style={{ left: pct(t) }}>
               {t === 0 ? '0 с' : t}
             </span>
           ))}
+          <span class="lt-knob" style={{ left: pct(head) }} />
         </div>
       </div>
+      {layers.length === 0 && <p class="muted lt-empty">У фреймі немає шарів.</p>}
       <div class="lt-body">
         {layers.map((layer) => {
           const anim = animOf(layer);
@@ -119,7 +159,7 @@ export function LayerTimeline(props: {
           return (
             <div
               class={`lt-row${selected ? ' selected' : ''}`}
-              style={{ minHeight: `${Math.max(22, lanes.length * LANE + 8)}px` }}
+              style={{ minHeight: `${Math.max(28, lanes.length * LANE + 10)}px` }}
               onClick={() => props.onSelect(layer.id)}
               title={lost ? 'Шар увійшов у растрове зображення батьківського шару, тому його анімація не застосується' : layer.name}
             >
@@ -136,7 +176,7 @@ export function LayerTimeline(props: {
                     style={{
                       left: pct(bar.start),
                       width: `max(4px, ${pct(bar.end - bar.start)})`,
-                      top: `${4 + lanes.indexOf(bar.kind) * LANE}px`,
+                      top: lanes.length === 1 ? `calc(50% - ${(LANE - 2) / 2}px)` : `${5 + lanes.indexOf(bar.kind) * LANE}px`,
                       height: `${LANE - 2}px`,
                     }}
                     title={`${BAR_TITLES[bar.kind]} (${round(bar.start)}–${round(bar.end)} с)`}
@@ -148,8 +188,7 @@ export function LayerTimeline(props: {
                   />
                 ))}
                 {maxDuration !== null && maxDuration < span && <span class="lt-limit" style={{ left: pct(maxDuration) }} />}
-                {/* Keyed by replay so the playhead restarts with the preview. */}
-                {bars.length > 0 && <span key={props.replay} class="lt-playhead" style={{ animationDuration: `${span}s` }} />}
+                <span class="lt-playhead" style={{ left: pct(head) }} />
               </div>
             </div>
           );
