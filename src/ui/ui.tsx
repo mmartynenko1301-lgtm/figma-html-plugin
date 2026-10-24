@@ -4,7 +4,7 @@ import { animationLength } from '../core/animate';
 import type { BundleItem } from '../core/bundle';
 import { bundleFiles, uniqueBases } from '../core/bundle';
 import { generate } from '../core/generate';
-import { NETWORKS, validate } from '../core/networks';
+import { NETWORKS, effectiveDuration, validate } from '../core/networks';
 import { LEVELS, fitToLimit, optimizeAssets } from '../core/optimize';
 import type { BannerSettings, LayerAnim, NetworkId, Preset, PresetScope } from '../shared/anim';
 import { isEmptyAnim } from '../shared/anim';
@@ -193,8 +193,9 @@ function App() {
   }, [layers]);
 
   const network = NETWORKS[settings?.network ?? 'google-ads'];
-  const length = animationLength(Object.values(anims), network.maxDuration);
-  spanRef.current = timelineSpan(Object.values(anims), network.maxDuration);
+  const maxDuration = effectiveDuration(network, settings?.duration ?? null);
+  const length = animationLength(Object.values(anims), maxDuration);
+  spanRef.current = timelineSpan(Object.values(anims), maxDuration);
 
   function changeLang(next: Lang) {
     setLang(next);
@@ -244,7 +245,8 @@ function App() {
         const r = await requestBuild(f.id, 'export', settings.backup);
         // The edited frame uses the panel's state; other frames use what is stored on their layers.
         const frameAnims = f.id === frame?.id ? anims : r.anims;
-        const options = { clickTag: settings.clickTag, anims: frameAnims, maxDuration: net.maxDuration, platform: net.platform };
+        const frameMax = effectiveDuration(net, settings.duration);
+        const options = { clickTag: settings.clickTag, anims: frameAnims, maxDuration: frameMax, platform: net.platform };
         // Without auto-optimisation only the lossless first level runs.
         const fitted = await fitToLimit(maxBytes, settings.optimize ? LEVELS.length : 1, async (level) => {
           const assets = await optimizeAssets(r.banner.assets, LEVELS[level], codec);
@@ -253,7 +255,13 @@ function App() {
           return { bytes: zip.length, result: { gen, zip } };
         });
         const { gen, zip } = fitted.result;
-        const problems = validate(net, { width: r.banner.width, height: r.banner.height, zipBytes: zip.length, fileCount: gen.files.length });
+        const problems = validate(net, {
+          width: r.banner.width,
+          height: r.banner.height,
+          zipBytes: zip.length,
+          fileCount: gen.files.length,
+          duration: animationLength(Object.values(frameAnims), frameMax),
+        });
         items.push({
           base: bases[i],
           name: f.name,
@@ -326,7 +334,7 @@ function App() {
 
   const selected = layers.find((l) => l.id === selectedIds[0]) ?? null;
   const problemCount = lastExport?.reduce((n, item) => n + item.problems.length, 0) ?? 0;
-  const overTime = length !== 'infinite' && network.maxDuration !== null && length > network.maxDuration;
+  const overTime = network.maxDuration !== null && (length === 'infinite' || length > network.maxDuration);
   const exported = lastExport?.find((item) => item.name === frame.name) ?? null;
   const frameIndex = frames.findIndex((f) => f.id === frame.id);
 
@@ -372,7 +380,7 @@ function App() {
           <div class="badges">
             <span class={`badge${overTime ? ' bad' : ''}`} title={t('Тривалість анімації і ліміт мережі', 'Animation length and network limit')}>
               {length === 'infinite' ? '∞' : `${length} ${t('с', 's')}`}
-              {network.maxDuration !== null ? ` / ${network.maxDuration} ${t('с', 's')}` : ''}
+              {maxDuration !== null ? ` / ${maxDuration} ${t('с', 's')}` : ''}
             </span>
             {exported && (
               <span class={`badge${exported.maxKb !== null && exported.kb > exported.maxKb ? ' bad' : ''}`} title={t('Вага ZIP після останнього експорту', 'ZIP size after the last export')}>
@@ -389,7 +397,7 @@ function App() {
         <div class="timeline">
           <LayerTimeline
             layers={layers}
-            maxDuration={network.maxDuration}
+            maxDuration={maxDuration}
             selectedIds={selectedIds}
             ids={built?.ids ?? null}
             time={seek ?? time}
@@ -472,6 +480,7 @@ function App() {
                 <span>clickTag</span>
                 <input type="url" value={settings.clickTag} onChange={(e) => updateSettings({ clickTag: e.currentTarget.value.trim() })} />
               </label>
+              <DurationField network={network} value={settings.duration} onChange={(duration) => updateSettings({ duration })} />
               <label class="check">
                 <input type="checkbox" checked={settings.backup} onChange={(e) => updateSettings({ backup: e.currentTarget.checked })} />
                 {t('Додати backup JPG', 'Add backup JPG')}
@@ -558,6 +567,65 @@ function App() {
 }
 
 type Zoom = 'fit' | '0.5' | '1' | '2';
+
+const DURATION_CHOICES = [10, 15, 20, 30];
+
+/** Total banner length: the network's limit, a common length, or any number of seconds. */
+function DurationField(props: { network: (typeof NETWORKS)[NetworkId]; value: number | null; onChange: (v: number | null) => void }) {
+  const { network, value } = props;
+  const [custom, setCustom] = useState(value !== null && !DURATION_CHOICES.includes(value));
+  const choice = value === null ? 'network' : custom ? 'custom' : String(value);
+  const s = t('с', 's');
+  const over = value !== null && network.maxDuration !== null && value > network.maxDuration;
+  return (
+    <>
+      <label class="field">
+        <span>{t('Тривалість', 'Duration')}</span>
+        <select
+          value={choice}
+          onChange={(e) => {
+            const v = e.currentTarget.value;
+            setCustom(v === 'custom');
+            if (v === 'network') props.onChange(null);
+            else if (v === 'custom') props.onChange(value ?? network.maxDuration ?? 30);
+            else props.onChange(Number(v));
+          }}
+        >
+          <option value="network">
+            {network.maxDuration === null ? t('Без обмеження', 'Unlimited') : t(`Ліміт мережі (${network.maxDuration} ${s})`, `Network limit (${network.maxDuration} ${s})`)}
+          </option>
+          {DURATION_CHOICES.map((d) => (
+            <option value={String(d)}>
+              {d} {s}
+            </option>
+          ))}
+          <option value="custom">{t('Своя…', 'Custom…')}</option>
+        </select>
+      </label>
+      {choice === 'custom' && (
+        <label class="field">
+          <span>{t('Секунд', 'Seconds')}</span>
+          <input
+            type="number"
+            min={1}
+            max={600}
+            step={1}
+            value={value ?? ''}
+            onChange={(e) => {
+              const v = parseFloat(e.currentTarget.value);
+              if (Number.isFinite(v) && v > 0) props.onChange(Math.min(600, Math.round(v * 10) / 10));
+            }}
+          />
+        </label>
+      )}
+      <p class={`small ${over ? 'error' : 'muted'}`}>
+        {over
+          ? t(`Довше за ліміт ${network.label} (${network.maxDuration} ${s}): мережа може відхилити банер.`, `Longer than the ${network.label} limit (${network.maxDuration} ${s}): the network may reject the banner.`)
+          : t('Цикли й повтори ключових кадрів обрізаються під цю тривалість.', 'Loops and keyframe repeats are cut to fit this length.')}
+      </p>
+    </>
+  );
+}
 
 const previewBusy = () => t('Готую превʼю…', 'Preparing preview…');
 
@@ -673,7 +741,7 @@ function Preview(props: {
     // Debounced so typing in a field does not restart the preview on every keystroke.
     const timer = setTimeout(() => {
       const net = NETWORKS[settings.network];
-      const { html, files } = generate(built.banner, { clickTag: settings.clickTag, anims, maxDuration: net.maxDuration, platform: net.platform });
+      const { html, files } = generate(built.banner, { clickTag: settings.clickTag, anims, maxDuration: effectiveDuration(net, settings.duration), platform: net.platform });
       // A comment that changes with each replay forces the iframe to reload.
       setDoc(previewHtml(html, files, blobs.current.urls) + `<!-- ${replay} -->`);
     }, 250);

@@ -107,9 +107,11 @@ export interface BannerSettings {
   backup: boolean;
   /** Shrink images on export until the ZIP fits the network's size limit. */
   optimize: boolean;
+  /** Total animation length in seconds that loops are cut to; null uses the network's limit. */
+  duration: number | null;
 }
 
-export const DEFAULT_SETTINGS: BannerSettings = { v: 1, clickTag: 'https://example.com', network: 'google-ads', backup: true, optimize: true };
+export const DEFAULT_SETTINGS: BannerSettings = { v: 1, clickTag: 'https://example.com', network: 'google-ads', backup: true, optimize: true, duration: null };
 
 export function defaultIntro(preset: IntroPreset): IntroAnim {
   const amount = preset === 'scaleIn' ? 0.6 : preset === 'zoomOut' ? 1.4 : preset === 'wordsUp' ? 16 : 24;
@@ -220,6 +222,7 @@ export function parseSettings(json: string): BannerSettings {
     network: networks.includes(raw.network) ? raw.network : DEFAULT_SETTINGS.network,
     backup: typeof raw.backup === 'boolean' ? raw.backup : DEFAULT_SETTINGS.backup,
     optimize: typeof raw.optimize === 'boolean' ? raw.optimize : DEFAULT_SETTINGS.optimize,
+    duration: typeof raw.duration === 'number' && raw.duration > 0 ? Math.min(raw.duration, 600) : null,
   };
 }
 
