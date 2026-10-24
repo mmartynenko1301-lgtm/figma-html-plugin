@@ -98,14 +98,14 @@ function sendState(): void {
   });
 }
 
-async function build(frameId: string, purpose: BuildPurpose, withBackup: 'jpg' | 'png' | null): Promise<void> {
+async function build(frameId: string, purpose: BuildPurpose, withBackup: 'jpg' | 'png' | null, scale = 1): Promise<void> {
   const node = await figma.getNodeByIdAsync(frameId);
   if (!isBannerFrame(node)) throw new Error(t('Фрейм не знайдено. Виділіть його ще раз.', 'Frame not found. Select it again.'));
   const { banner, warnings } = await serializeBanner(node);
   const anims: Record<string, LayerAnim> = {};
   for (const layer of collectLayers(node)) if (layer.anim) anims[layer.id] = layer.anim;
   // The backup shows the design as drawn, which is the final state of every animation.
-  const backup = purpose === 'export' && withBackup ? await node.exportAsync({ format: withBackup === 'png' ? 'PNG' : 'JPG', constraint: { type: 'SCALE', value: 1 } }) : null;
+  const backup = purpose === 'export' && withBackup ? await node.exportAsync({ format: withBackup === 'png' ? 'PNG' : 'JPG', constraint: { type: 'SCALE', value: scale } }) : null;
   post({ type: 'banner', purpose, banner, warnings, anims, backup });
 }
 
@@ -167,7 +167,7 @@ figma.ui.onmessage = async (msg: UiMessage) => {
   try {
     switch (msg.type) {
       case 'build':
-        await build(msg.frameId, msg.purpose, msg.backup);
+        await build(msg.frameId, msg.purpose, msg.backup, msg.scale === 2 ? 2 : 1);
         break;
       case 'set-anim':
         await setAnim(msg.nodeId, msg.anim);

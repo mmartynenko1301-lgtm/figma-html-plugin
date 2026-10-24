@@ -26,6 +26,15 @@ describe('parseSettings', () => {
       backup: false,
     });
   });
+
+  it('reads the export format and keeps GIF or WebP on', () => {
+    const stored = { v: 1, format: 'animated', animated: { gif: false, webp: false, fps: 10 }, image: { format: 'png', scale: 2 } };
+    const s = parseSettings(JSON.stringify(stored));
+    expect(s.format).toBe('animated');
+    expect(s.animated).toMatchObject({ gif: true, webp: false, fps: 10 });
+    expect(s.image).toEqual({ format: 'png', scale: 2 });
+    expect(parseSettings(JSON.stringify({ v: 1, format: 'pdf', image: { format: 'bmp', scale: 3 } }))).toMatchObject({ format: 'html', image: { format: 'jpg', scale: 1 } });
+  });
 });
 
 describe('older stored data', () => {

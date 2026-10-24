@@ -7,11 +7,11 @@ import type { OutputFile } from '../core/generate';
 import { generate } from '../core/generate';
 import { NETWORKS, effectiveDuration, validate } from '../core/networks';
 import { LEVELS, fitToLimit, optimizeAssets } from '../core/optimize';
-import type { AnimatedSettings, BackupFormat, BannerSettings, LayerAnim, NetworkId, Preset, PresetScope } from '../shared/anim';
+import type { AnimatedSettings, BackupFormat, BannerSettings, ExportFormat, ImageFormat, ImageSettings, LayerAnim, NetworkId, Preset, PresetScope } from '../shared/anim';
 import { ANIMATED_FPS, isEmptyAnim } from '../shared/anim';
 import type { Banner, BannerNode } from '../shared/ir';
 import type { BuildPurpose, FrameInfo, LayerInfo, MainMessage, UiMessage } from '../shared/messages';
-import type { AnimatedFile, AnimatedResult } from './animated';
+import type { AnimatedResult } from './animated';
 import { buildAnimated } from './animated';
 import { encodeAvif } from './avif';
 import { canvasCodec } from './codec';
@@ -47,7 +47,9 @@ interface ExportResult {
   kb: number;
   maxKb: number | null;
   problems: string[];
-  animated: { ext: string; kb: number; label: string; fits: boolean }[];
+  kind: ExportFormat;
+  /** GIF/WebP or image files made for the banner. */
+  files: { ext: string; kb: number; label: string; fits: boolean }[];
 }
 
 type Pending = { resolve: (r: BuildResult) => void; reject: (e: Error) => void };
@@ -136,10 +138,10 @@ function App() {
   const pending = useRef(new Map<string, Pending>());
 
   /** Asks the main thread to read a frame from Figma; one request per frame and purpose at a time. */
-  function requestBuild(frameId: string, purpose: BuildPurpose, backup: 'jpg' | 'png' | null = null): Promise<BuildResult> {
+  function requestBuild(frameId: string, purpose: BuildPurpose, backup: 'jpg' | 'png' | null = null, scale = 1): Promise<BuildResult> {
     return new Promise((resolve, reject) => {
       pending.current.set(`${frameId}|${purpose}`, { resolve, reject });
-      send({ type: 'build', frameId, purpose, backup });
+      send({ type: 'build', frameId, purpose, backup, scale });
     });
   }
 
@@ -207,7 +209,7 @@ function App() {
   // GIF/WebP of the current frame, built in the background while the Export tab is open,
   // so the size is known before exporting; the export reuses it when nothing changed.
   useEffect(() => {
-    if (!built || !settings || tab !== 'export' || !(settings.animated.gif || settings.animated.webp)) return;
+    if (!built || !settings || tab !== 'export' || settings.format !== 'animated') return;
     const net = NETWORKS[settings.network];
     const max = effectiveDuration(net, settings.duration);
     const gen = generate(built.banner, { clickTag: settings.clickTag, anims, maxDuration: max, platform: net.platform });
@@ -269,102 +271,163 @@ function App() {
     for (const id of selectedIds) updateAnim(id, structuredCloneAnim(anim));
   }
 
-  /** Exports every selected banner frame with the current frame's network, link and backup settings. */
+  /** Exports every selected banner frame in the chosen format, with the current frame's settings. */
   async function exportAll() {
     if (!settings || frames.length === 0) return;
-    const net = NETWORKS[settings.network];
-    const items: BundleItem[] = [];
-    const animatedOut: AnimatedFile[][] = [];
-    const notesOut: string[] = [];
-    const codec = canvasCodec();
-    const maxBytes = net.maxKb === null ? null : net.maxKb * 1024;
     try {
-      const bases = uniqueBases(frames.map((f) => `${slug(f.name)}_${f.width}x${f.height}`));
-      for (const [i, f] of frames.entries()) {
-        setBusy(frames.length > 1 ? t(`Експортую ${i + 1} з ${frames.length}: ${f.name}`, `Exporting ${i + 1} of ${frames.length}: ${f.name}`) : t('Експортую…', 'Exporting…'));
-        const r = await requestBuild(f.id, 'export', settings.backup ? (settings.backupFormat === 'jpg' ? 'jpg' : 'png') : null);
-        // The edited frame uses the panel's state; other frames use what is stored on their layers.
-        const frameAnims = f.id === frame?.id ? anims : r.anims;
-        const frameMax = effectiveDuration(net, settings.duration);
-        const options = { clickTag: settings.clickTag, anims: frameAnims, maxDuration: frameMax, platform: net.platform };
-        // Without auto-optimisation only the lossless first level runs.
-        const fitted = await fitToLimit(maxBytes, settings.optimize ? LEVELS.length : 1, async (level) => {
-          const assets = await optimizeAssets(r.banner.assets, LEVELS[level], codec);
-          const gen = generate({ ...r.banner, assets }, options);
-          const zip = await zipFiles(gen.files);
-          return { bytes: zip.length, result: { gen, zip } };
-        });
-        const { gen, zip } = fitted.result;
-        const page = { width: r.banner.width, height: r.banner.height, ...generate(r.banner, options) };
-        let animated: AnimatedResult | null = null;
-        if (settings.animated.gif || settings.animated.webp) {
-          const key = animatedKey(page, settings.animated, animationDuration(frameAnims, frameMax));
-          const cached = estimateCache.current;
-          animated =
-            cached && cached.key === key
-              ? cached.result
-              : await buildAnimated(page, settings.animated, animationDuration(frameAnims, frameMax), (share) =>
-                  setBusy(t(`GIF/WebP ${frames.length > 1 ? `${i + 1}/${frames.length} ` : ''}${Math.round(share * 100)}%`, `GIF/WebP ${frames.length > 1 ? `${i + 1}/${frames.length} ` : ''}${Math.round(share * 100)}%`)),
-                );
-        }
-        const backup = r.backup && settings.backup ? await convertBackup(r.backup, settings.backupFormat) : null;
-        const problems = validate(net, {
-          width: r.banner.width,
-          height: r.banner.height,
-          zipBytes: zip.length,
-          fileCount: gen.files.length,
-          duration: animationLength(Object.values(frameAnims), frameMax),
-        });
-        items.push({
-          base: bases[i],
-          name: f.name,
-          width: r.banner.width,
-          height: r.banner.height,
-          zip,
-          previewHtml: gen.html,
-          assets: gen.files.filter((file) => file.path.startsWith('img/')),
-          backup,
-          animated: animated?.files.map((a) => ({ ext: a.ext, bytes: a.bytes })) ?? [],
-          problems,
-        });
-        animatedOut.push(animated?.files ?? []);
-        const prefix = frames.length > 1 ? `${f.name}: ` : '';
-        if (fitted.level > 0) {
-          notesOut.push(
-            prefix + t(`Картинки стиснуто (${LEVELS[fitted.level].label}), щоб вміститися в ${net.maxKb} KB.`, `Images compressed (${LEVELS[fitted.level].label}) to fit ${net.maxKb} KB.`),
-          );
-        }
-        notesOut.push(...[...problems, ...gen.warnings, ...r.warnings].map((n) => prefix + n));
-      }
-
-      if (items.length === 1 && !items[0].backup && items[0].animated.length === 0) {
-        download(items[0].zip, `${items[0].base}.zip`, 'application/zip');
-      } else {
-        const title = items.length === 1 ? items[0].base : `banners_${items.length}`;
-        download(await zipFiles(bundleFiles(items, title)), `${title}_export.zip`, 'application/zip');
-      }
-      const totalKb = items.reduce((sum, item) => sum + item.zip.length, 0) / 1024;
-      setNotes(notesOut);
-      setLastExport(
-        items.map((item, i) => ({
-          name: item.name,
-          animated: animatedOut[i].map((a) => ({ ext: a.ext, kb: a.bytes.length / 1024, label: a.label, fits: a.fits })),
-          size: `${Math.round(item.width)}×${Math.round(item.height)}`,
-          kb: item.zip.length / 1024,
-          maxKb: net.maxKb,
-          problems: item.problems,
-        })),
-      );
-      if (items.some((item) => item.problems.length > 0)) setTab('export');
-      setStatus({
-        text: t(`Готово: банерів ${items.length}, ${totalKb.toFixed(1)} KB.`, `Done: ${items.length} banners, ${totalKb.toFixed(1)} KB.`),
-        error: items.some((item) => item.problems.length > 0),
-      });
+      if (settings.format === 'html') await exportHtml(settings);
+      else await exportMedia(settings);
     } catch (err) {
       setStatus({ text: errorText(err), error: true });
     } finally {
       setBusy(null);
     }
+  }
+
+  async function exportHtml(settings: BannerSettings) {
+    const net = NETWORKS[settings.network];
+    const items: BundleItem[] = [];
+    const notesOut: string[] = [];
+    const codec = canvasCodec();
+    const maxBytes = net.maxKb === null ? null : net.maxKb * 1024;
+    const bases = uniqueBases(frames.map((f) => `${slug(f.name)}_${f.width}x${f.height}`));
+    for (const [i, f] of frames.entries()) {
+      setBusy(exportingText(i, f.name));
+      const r = await requestBuild(f.id, 'export', settings.backup ? (settings.backupFormat === 'jpg' ? 'jpg' : 'png') : null);
+      // The edited frame uses the panel's state; other frames use what is stored on their layers.
+      const frameAnims = f.id === frame?.id ? anims : r.anims;
+      const frameMax = effectiveDuration(net, settings.duration);
+      const options = { clickTag: settings.clickTag, anims: frameAnims, maxDuration: frameMax, platform: net.platform };
+      // Without auto-optimisation only the lossless first level runs.
+      const fitted = await fitToLimit(maxBytes, settings.optimize ? LEVELS.length : 1, async (level) => {
+        const assets = await optimizeAssets(r.banner.assets, LEVELS[level], codec);
+        const gen = generate({ ...r.banner, assets }, options);
+        const zip = await zipFiles(gen.files);
+        return { bytes: zip.length, result: { gen, zip } };
+      });
+      const { gen, zip } = fitted.result;
+      const backup = r.backup && settings.backup ? await convertBackup(r.backup, settings.backupFormat) : null;
+      const problems = validate(net, {
+        width: r.banner.width,
+        height: r.banner.height,
+        zipBytes: zip.length,
+        fileCount: gen.files.length,
+        duration: animationLength(Object.values(frameAnims), frameMax),
+      });
+      items.push({
+        base: bases[i],
+        name: f.name,
+        width: r.banner.width,
+        height: r.banner.height,
+        zip,
+        previewHtml: gen.html,
+        assets: gen.files.filter((file) => file.path.startsWith('img/')),
+        backup,
+        animated: [],
+        problems,
+      });
+      const prefix = frames.length > 1 ? `${f.name}: ` : '';
+      if (fitted.level > 0) {
+        notesOut.push(
+          prefix + t(`Картинки стиснуто (${LEVELS[fitted.level].label}), щоб вміститися в ${net.maxKb} KB.`, `Images compressed (${LEVELS[fitted.level].label}) to fit ${net.maxKb} KB.`),
+        );
+      }
+      notesOut.push(...[...problems, ...gen.warnings, ...r.warnings].map((n) => prefix + n));
+    }
+
+    if (items.length === 1 && !items[0].backup) {
+      download(items[0].zip, `${items[0].base}.zip`, 'application/zip');
+    } else {
+      const title = items.length === 1 ? items[0].base : `banners_${items.length}`;
+      download(await zipFiles(bundleFiles(items, title)), `${title}_export.zip`, 'application/zip');
+    }
+    const totalKb = items.reduce((sum, item) => sum + item.zip.length, 0) / 1024;
+    setNotes(notesOut);
+    setLastExport(
+      items.map((item) => ({
+        name: item.name,
+        kind: 'html',
+        files: item.backup ? [{ ext: item.backup.ext, kb: item.backup.bytes.length / 1024, label: 'backup', fits: true }] : [],
+        size: `${Math.round(item.width)}×${Math.round(item.height)}`,
+        kb: item.zip.length / 1024,
+        maxKb: net.maxKb,
+        problems: item.problems,
+      })),
+    );
+    if (items.some((item) => item.problems.length > 0)) setTab('export');
+    setStatus({
+      text: t(`Готово: банерів ${items.length}, ${totalKb.toFixed(1)} KB.`, `Done: ${items.length} banners, ${totalKb.toFixed(1)} KB.`),
+      error: items.some((item) => item.problems.length > 0),
+    });
+  }
+
+  /** GIF/WebP or a static image of every selected frame; one file downloads as is, several as a ZIP. */
+  async function exportMedia(settings: BannerSettings) {
+    const net = NETWORKS[settings.network];
+    const out: OutputFile[] = [];
+    const results: ExportResult[] = [];
+    const notesOut: string[] = [];
+    const bases = uniqueBases(frames.map((f) => `${slug(f.name)}_${f.width}x${f.height}`));
+    for (const [i, f] of frames.entries()) {
+      setBusy(exportingText(i, f.name));
+      const prefix = frames.length > 1 ? `${f.name}: ` : '';
+      let files: { ext: string; bytes: Uint8Array; label: string; fits: boolean }[];
+      if (settings.format === 'image') {
+        const { format, scale } = settings.image;
+        const r = await requestBuild(f.id, 'export', format === 'jpg' ? 'jpg' : 'png', scale);
+        if (!r.backup) throw new Error(t('Figma не віддала картинку фрейму.', 'Figma did not return the frame image.'));
+        const image = await convertBackup(r.backup, format);
+        files = [{ ...image, label: `${scale}x`, fits: true }];
+        notesOut.push(...r.warnings.map((n) => prefix + n));
+      } else {
+        const r = await requestBuild(f.id, 'export');
+        const frameAnims = f.id === frame?.id ? anims : r.anims;
+        const frameMax = effectiveDuration(net, settings.duration);
+        const page = { width: r.banner.width, height: r.banner.height, ...generate(r.banner, { clickTag: settings.clickTag, anims: frameAnims, maxDuration: frameMax, platform: net.platform }) };
+        const duration = animationDuration(frameAnims, frameMax);
+        const key = animatedKey(page, settings.animated, duration);
+        const cached = estimateCache.current;
+        const step = frames.length > 1 ? `${i + 1}/${frames.length} ` : '';
+        const animated =
+          cached && cached.key === key
+            ? cached.result
+            : await buildAnimated(page, settings.animated, duration, (share) => setBusy(`GIF/WebP ${step}${Math.round(share * 100)}%`));
+        files = animated?.files ?? [];
+        notesOut.push(...[...page.warnings, ...r.warnings].map((n) => prefix + n));
+        for (const a of files) {
+          if (!a.fits) notesOut.push(prefix + t(`${a.ext.toUpperCase()} не вміщується в ${settings.animated.maxKb} KB навіть на найнижчих налаштуваннях.`, `${a.ext.toUpperCase()} does not fit ${settings.animated.maxKb} KB even at the lowest settings.`));
+        }
+      }
+      for (const file of files) out.push({ path: `${bases[i]}.${file.ext}`, data: file.bytes });
+      results.push({
+        name: f.name,
+        kind: settings.format,
+        size: `${Math.round(f.width)}×${Math.round(f.height)}`,
+        kb: files.reduce((n, file) => n + file.bytes.length, 0) / 1024,
+        maxKb: null,
+        problems: [],
+        files: files.map((file) => ({ ext: file.ext, kb: file.bytes.length / 1024, label: file.label, fits: file.fits })),
+      });
+    }
+
+    if (out.length === 1) {
+      const file = out[0];
+      download(file.data as Uint8Array, file.path, MIME[file.path.slice(file.path.lastIndexOf('.') + 1)] ?? 'application/octet-stream');
+    } else {
+      const title = frames.length === 1 ? bases[0] : `banners_${frames.length}`;
+      download(await zipFiles(out), `${title}_${settings.format === 'image' ? 'images' : 'animated'}.zip`, 'application/zip');
+    }
+    const totalKb = results.reduce((n, r) => n + r.kb, 0);
+    setNotes(notesOut);
+    setLastExport(results);
+    setStatus({
+      text: t(`Готово: файлів ${out.length}, ${totalKb.toFixed(1)} KB.`, `Done: ${out.length} files, ${totalKb.toFixed(1)} KB.`),
+      error: results.some((r) => r.files.some((file) => !file.fits)),
+    });
+  }
+
+  function exportingText(i: number, name: string): string {
+    return frames.length > 1 ? t(`Експортую ${i + 1} з ${frames.length}: ${name}`, `Exporting ${i + 1} of ${frames.length}: ${name}`) : t('Експортую…', 'Exporting…');
   }
 
   if (!frame || !settings) {
@@ -378,7 +441,7 @@ function App() {
           <ol>
             <li>{t('Виділіть фрейм банера або будь-який шар у ньому.', 'Select a banner frame or any layer in it.')}</li>
             <li>{t('Додайте шарам анімації або застосуйте пресет.', 'Add animations to layers or apply a preset.')}</li>
-            <li>{t('Виберіть мережу та експортуйте ZIP.', 'Pick a network and export the ZIP.')}</li>
+            <li>{t('Виберіть формат: HTML5, GIF/WebP або картинку, і експортуйте.', 'Pick a format: HTML5, GIF/WebP or an image, and export.')}</li>
           </ol>
           <p class="muted small">{t('Щоб експортувати кілька розмірів разом, виділіть кілька фреймів.', 'To export several sizes together, select several frames.')}</p>
           <LangSwitch lang={lang} onChange={changeLang} />
@@ -438,14 +501,14 @@ function App() {
               {length === 'infinite' ? '∞' : `${length} ${t('с', 's')}`}
               {maxDuration !== null ? ` / ${maxDuration} ${t('с', 's')}` : ''}
             </span>
-            {exported && (
+            {exported?.kind === 'html' && (
               <span class={`badge${exported.maxKb !== null && exported.kb > exported.maxKb ? ' bad' : ''}`} title={t('Вага ZIP після останнього експорту', 'ZIP size after the last export')}>
                 <span class={`dot ${exported.maxKb !== null && exported.kb > exported.maxKb ? 'outro' : 'loop'}`} />
                 {exported.kb.toFixed(0)} KB{exported.maxKb !== null ? ` / ${exported.maxKb} KB` : ''}
               </span>
             )}
-            <button class="badge" title={t('Мережа для експорту', 'Network to export for')} onClick={() => setTab('export')}>
-              {network.label}
+            <button class="badge" title={t('Формат експорту', 'Export format')} onClick={() => setTab('export')}>
+              {settings.format === 'html' ? network.label : formatName(settings)}
             </button>
           </div>
         </div>
@@ -523,55 +586,77 @@ function App() {
 
           {tab === 'export' && (
             <section class="export">
-              <h3>{t('Мережа', 'Network')}</h3>
-              <label class="field">
-                <span>{t('Мережа', 'Network')}</span>
-                <select value={settings.network} onChange={(e) => updateSettings({ network: e.currentTarget.value as NetworkId })}>
-                  {Object.values(NETWORKS).map((n) => (
-                    <option value={n.id}>{n.label}</option>
-                  ))}
-                </select>
-              </label>
-              <label class="field">
-                <span>clickTag</span>
-                <input type="url" value={settings.clickTag} onChange={(e) => updateSettings({ clickTag: e.currentTarget.value.trim() })} />
-              </label>
-              <DurationField network={network} value={settings.duration} onChange={(duration) => updateSettings({ duration })} />
-              <label class="check">
-                <input type="checkbox" checked={settings.backup} onChange={(e) => updateSettings({ backup: e.currentTarget.checked })} />
-                {t('Додати статичний backup', 'Add a static backup')}
-              </label>
-              {settings.backup && (
-                <label class="field">
-                  <span>{t('Формат backup', 'Backup format')}</span>
-                  <select value={settings.backupFormat} onChange={(e) => updateSettings({ backupFormat: e.currentTarget.value as BackupFormat })}>
-                    <option value="jpg">JPG</option>
-                    <option value="webp">WebP</option>
-                    <option value="avif">AVIF</option>
-                  </select>
-                </label>
-              )}
-              <label class="check">
-                <input type="checkbox" checked={settings.optimize} onChange={(e) => updateSettings({ optimize: e.currentTarget.checked })} />
-                {t('Стискати картинки під ліміт', 'Compress images to fit the limit')}
-              </label>
+              <h3>{t('Формат', 'Format')}</h3>
+              <FormatSwitch value={settings.format} onChange={(format) => updateSettings({ format })} />
 
-              <hr />
-              <h3>{t('Ліміти', 'Limits')}</h3>
-              <dl class="facts">
-                <dt>{t('Вага ZIP', 'ZIP size')}</dt>
-                <dd>{network.maxKb === null ? t('без ліміту', 'no limit') : `≤ ${network.maxKb} KB`}</dd>
-                <dt>{t('Тривалість', 'Duration')}</dt>
-                <dd>{network.maxDuration === null ? t('без ліміту', 'no limit') : `≤ ${network.maxDuration} ${t('с', 's')}`}</dd>
-              </dl>
-              {network.note && <p class="muted small">{network.note}</p>}
-              <hr />
-              <AnimatedPanel settings={settings.animated} estimate={estimate} onChange={(patch) => updateSettings({ animated: { ...settings.animated, ...patch } })} />
+              {settings.format === 'html' && (
+                <>
+                  <hr />
+                  <h3>HTML5</h3>
+                  <label class="field">
+                    <span>{t('Мережа', 'Network')}</span>
+                    <select value={settings.network} onChange={(e) => updateSettings({ network: e.currentTarget.value as NetworkId })}>
+                      {Object.values(NETWORKS).map((n) => (
+                        <option value={n.id}>{n.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label class="field">
+                    <span>clickTag</span>
+                    <input type="url" value={settings.clickTag} onChange={(e) => updateSettings({ clickTag: e.currentTarget.value.trim() })} />
+                  </label>
+                  <DurationField network={network} value={settings.duration} onChange={(duration) => updateSettings({ duration })} />
+                  <label class="check">
+                    <input type="checkbox" checked={settings.backup} onChange={(e) => updateSettings({ backup: e.currentTarget.checked })} />
+                    {t('Додати статичний backup', 'Add a static backup')}
+                  </label>
+                  {settings.backup && (
+                    <label class="field">
+                      <span>{t('Формат backup', 'Backup format')}</span>
+                      <select value={settings.backupFormat} onChange={(e) => updateSettings({ backupFormat: e.currentTarget.value as BackupFormat })}>
+                        <option value="jpg">JPG</option>
+                        <option value="webp">WebP</option>
+                        <option value="avif">AVIF</option>
+                      </select>
+                    </label>
+                  )}
+                  <label class="check">
+                    <input type="checkbox" checked={settings.optimize} onChange={(e) => updateSettings({ optimize: e.currentTarget.checked })} />
+                    {t('Стискати картинки під ліміт', 'Compress images to fit the limit')}
+                  </label>
+
+                  <hr />
+                  <h3>{t('Ліміти', 'Limits')}</h3>
+                  <dl class="facts">
+                    <dt>{t('Вага ZIP', 'ZIP size')}</dt>
+                    <dd>{network.maxKb === null ? t('без ліміту', 'no limit') : `≤ ${network.maxKb} KB`}</dd>
+                    <dt>{t('Тривалість', 'Duration')}</dt>
+                    <dd>{network.maxDuration === null ? t('без ліміту', 'no limit') : `≤ ${network.maxDuration} ${t('с', 's')}`}</dd>
+                  </dl>
+                  {network.note && <p class="muted small">{network.note}</p>}
+                </>
+              )}
+
+              {settings.format === 'animated' && (
+                <>
+                  <hr />
+                  <DurationField network={network} value={settings.duration} onChange={(duration) => updateSettings({ duration })} />
+                  <AnimatedPanel settings={settings.animated} estimate={estimate} onChange={(patch) => updateSettings({ animated: { ...settings.animated, ...patch } })} />
+                </>
+              )}
+
+              {settings.format === 'image' && (
+                <>
+                  <hr />
+                  <ImagePanel settings={settings.image} onChange={(patch) => updateSettings({ image: { ...settings.image, ...patch } })} />
+                </>
+              )}
+
               {frames.length > 1 && (
                 <p class="muted small">
                   {t(
-                    `Виділено фреймів: ${frames.length}. Мережа, посилання і backup беруться з поточного фрейму, анімації — з кожного фрейму свої.`,
-                    `${frames.length} frames selected. Network, link and backup come from the current frame; each frame keeps its own animations.`,
+                    `Виділено фреймів: ${frames.length}. Налаштування беруться з поточного фрейму, анімації — з кожного фрейму свої.`,
+                    `${frames.length} frames selected. Settings come from the current frame; each frame keeps its own animations.`,
                   )}
                 </p>
               )}
@@ -591,10 +676,12 @@ function App() {
                           <span style={{ width: `${Math.min(100, (item.kb / item.maxKb) * 100)}%` }} />
                         </div>
                       )}
-                      <span class={`small ${item.maxKb !== null && item.kb > item.maxKb ? 'error' : 'ok'}`}>
-                        {item.kb.toFixed(1)} KB{item.maxKb !== null ? t(` з ${item.maxKb} KB`, ` of ${item.maxKb} KB`) : ''}
-                      </span>
-                      {item.animated.map((a) => (
+                      {item.kind === 'html' && (
+                        <span class={`small ${item.maxKb !== null && item.kb > item.maxKb ? 'error' : 'ok'}`}>
+                          ZIP {item.kb.toFixed(1)} KB{item.maxKb !== null ? t(` з ${item.maxKb} KB`, ` of ${item.maxKb} KB`) : ''}
+                        </span>
+                      )}
+                      {item.files.map((a) => (
                         <span class={`small ${a.fits ? 'muted' : 'error'}`}>
                           {a.ext.toUpperCase()}: {a.kb.toFixed(1)} KB · {a.label}
                         </span>
@@ -630,7 +717,11 @@ function App() {
           )}
           <button class="btn primary" onClick={() => void exportAll()} disabled={!!busy}>
             <Icon name="download" />
-            {busy && busy !== previewBusy() ? busy : frames.length > 1 ? t(`Експортувати всі (${frames.length})`, `Export all (${frames.length})`) : t('Експортувати', 'Export')}
+            {busy && busy !== previewBusy()
+              ? busy
+              : frames.length > 1
+                ? t(`Експорт ${formatName(settings)} (${frames.length})`, `Export ${formatName(settings)} (${frames.length})`)
+                : t(`Експорт ${formatName(settings)}`, `Export ${formatName(settings)}`)}
           </button>
         </footer>
       </aside>
@@ -654,14 +745,15 @@ function AnimatedPanel(props: { settings: AnimatedSettings; estimate: Estimate |
   const on = settings.gif || settings.webp;
   return (
     <>
-      <h3>{t('Анімована картинка', 'Animated image')}</h3>
+      <h3>GIF / WebP</h3>
       <div class="row">
+        {/* One of the two stays on: unticking the last one is ignored. */}
         <label class="check">
-          <input type="checkbox" checked={settings.gif} onChange={(e) => props.onChange({ gif: e.currentTarget.checked })} />
+          <input type="checkbox" checked={settings.gif} disabled={settings.gif && !settings.webp} onChange={(e) => props.onChange({ gif: e.currentTarget.checked })} />
           GIF
         </label>
         <label class="check">
-          <input type="checkbox" checked={settings.webp} onChange={(e) => props.onChange({ webp: e.currentTarget.checked })} />
+          <input type="checkbox" checked={settings.webp} disabled={settings.webp && !settings.gif} onChange={(e) => props.onChange({ webp: e.currentTarget.checked })} />
           WebP
         </label>
       </div>
@@ -726,6 +818,64 @@ function AnimatedPanel(props: { settings: AnimatedSettings; estimate: Estimate |
     </>
   );
 }
+
+const FORMATS: { id: ExportFormat; label: () => string }[] = [
+  { id: 'html', label: () => 'HTML5' },
+  { id: 'animated', label: () => 'GIF / WebP' },
+  { id: 'image', label: () => t('Картинка', 'Image') },
+];
+
+function FormatSwitch(props: { value: ExportFormat; onChange: (format: ExportFormat) => void }) {
+  return (
+    <div class="segmented">
+      {FORMATS.map((f) => (
+        <button class={props.value === f.id ? 'on' : ''} onClick={() => props.onChange(f.id)}>
+          {f.label()}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Short name of what the export button makes, e.g. "GIF + WebP" or "PNG". */
+function formatName(settings: BannerSettings): string {
+  if (settings.format === 'html') return 'HTML5';
+  if (settings.format === 'image') return settings.image.format.toUpperCase();
+  return [settings.animated.gif && 'GIF', settings.animated.webp && 'WebP'].filter(Boolean).join(' + ');
+}
+
+/** Static image of the frame as drawn in Figma. */
+function ImagePanel(props: { settings: ImageSettings; onChange: (patch: Partial<ImageSettings>) => void }) {
+  const { settings } = props;
+  return (
+    <>
+      <h3>{t('Картинка', 'Image')}</h3>
+      <label class="field">
+        <span>{t('Формат', 'Format')}</span>
+        <select value={settings.format} onChange={(e) => props.onChange({ format: e.currentTarget.value as ImageFormat })}>
+          <option value="jpg">JPG</option>
+          <option value="png">PNG</option>
+          <option value="webp">WebP</option>
+          <option value="avif">AVIF</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>{t('Розмір', 'Size')}</span>
+        <select value={String(settings.scale)} onChange={(e) => props.onChange({ scale: Number(e.currentTarget.value) })}>
+          <option value="1">1x</option>
+          <option value="2">2x (retina)</option>
+        </select>
+      </label>
+      <p class="muted small">
+        {settings.format === 'avif'
+          ? t('Фрейм як він намальований у Figma. Для першого AVIF потрібен інтернет: кодувальник завантажується один раз.', 'The frame as drawn in Figma. The first AVIF needs internet: the encoder downloads once.')
+          : t('Фрейм як він намальований у Figma, тобто кінцевий стан анімацій.', 'The frame as drawn in Figma, which is the end state of the animations.')}
+      </p>
+    </>
+  );
+}
+
+const MIME: Record<string, string> = { gif: 'image/gif', webp: 'image/webp', avif: 'image/avif', jpg: 'image/jpeg', png: 'image/png' };
 
 const DURATION_CHOICES = [10, 15, 20, 30];
 
@@ -963,9 +1113,9 @@ function animatedKey(page: { html: string; files: OutputFile[] }, settings: Anim
   return JSON.stringify([page.html, files, settings, duration]);
 }
 
-/** The static backup in the chosen format; JPG comes from Figma as is, others from its PNG. */
-async function convertBackup(bytes: Uint8Array, format: BackupFormat): Promise<{ ext: string; bytes: Uint8Array }> {
-  if (format === 'jpg') return { ext: 'jpg', bytes };
+/** The frame image in the chosen format; JPG and PNG come from Figma as is, others from its PNG. */
+async function convertBackup(bytes: Uint8Array, format: ImageFormat): Promise<{ ext: string; bytes: Uint8Array }> {
+  if (format === 'jpg' || format === 'png') return { ext: format, bytes };
   const bitmap = await createImageBitmap(new Blob([bytes as Uint8Array<ArrayBuffer>], { type: 'image/png' }));
   const canvas = document.createElement('canvas');
   canvas.width = bitmap.width;
