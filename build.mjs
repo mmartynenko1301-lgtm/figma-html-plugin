@@ -21,7 +21,16 @@ const inlineUi = {
 const common = { bundle: true, target: 'es2019', logLevel: 'info', jsx: 'automatic', jsxImportSource: 'preact' };
 
 const main = await esbuild.context({ ...common, entryPoints: ['src/main/code.ts'], outfile: 'dist/code.js' });
-const ui = await esbuild.context({ ...common, entryPoints: ['src/ui/ui.tsx'], outfile: 'dist/ui.js', write: false, plugins: [inlineUi] });
+// The AVIF encoder's Emscripten glue resolves its wasm file against import.meta.url;
+// the binary is passed in directly, so any absolute URL satisfies it.
+const ui = await esbuild.context({
+  ...common,
+  entryPoints: ['src/ui/ui.tsx'],
+  outfile: 'dist/ui.js',
+  write: false,
+  plugins: [inlineUi],
+  define: { 'import.meta.url': '"https://localhost/"' },
+});
 
 if (watch) {
   await Promise.all([main.watch(), ui.watch()]);

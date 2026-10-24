@@ -10,6 +10,8 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@jsquash/avif": "2.1.1",
+    "gifenc": "1.0.3",
     "jszip": "3.10.2",
     "preact": "10.29.8"
   },

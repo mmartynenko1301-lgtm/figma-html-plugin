@@ -13,7 +13,9 @@ export interface BundleItem {
   /** A complete preview document and its assets, unzipped. */
   previewHtml: string;
   assets: OutputFile[];
-  backup: Uint8Array | null;
+  backup: { ext: string; bytes: Uint8Array } | null;
+  /** Animated GIF / WebP versions of the banner. */
+  animated: { ext: string; bytes: Uint8Array }[];
   problems: string[];
 }
 
@@ -21,14 +23,16 @@ export interface BundleItem {
  * Lays out an export of one or more banners:
  *   preview.html             — every banner side by side, for review and approval
  *   zips/<base>.zip          — upload-ready ZIPs
- *   backups/<base>.jpg       — static backups, when enabled
+ *   backups/<base>.jpg       — static backups, when enabled (or .webp, .avif)
+ *   animated/<base>.gif      — animated GIF / WebP versions, when enabled
  *   preview/<base>/…         — unzipped banners the preview page loads
  */
 export function bundleFiles(items: BundleItem[], title: string): OutputFile[] {
   const files: OutputFile[] = [{ path: 'preview.html', data: previewPage(items, title) }];
   for (const item of items) {
     files.push({ path: `zips/${item.base}.zip`, data: item.zip });
-    if (item.backup) files.push({ path: `backups/${item.base}.jpg`, data: item.backup });
+    if (item.backup) files.push({ path: `backups/${item.base}.${item.backup.ext}`, data: item.backup.bytes });
+    for (const a of item.animated) files.push({ path: `animated/${item.base}.${a.ext}`, data: a.bytes });
     files.push({ path: `preview/${item.base}/index.html`, data: item.previewHtml });
     for (const asset of item.assets) files.push({ path: `preview/${item.base}/${asset.path}`, data: asset.data });
   }
