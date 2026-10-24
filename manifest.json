@@ -4,10 +4,16 @@
   "api": "1.0.0",
   "main": "dist/code.js",
   "ui": "dist/ui.html",
-  "editorType": ["figma"],
+  "editorType": [
+    "figma"
+  ],
   "documentAccess": "dynamic-page",
   "networkAccess": {
-    "allowedDomains": ["https://fonts.googleapis.com", "https://fonts.gstatic.com"],
-    "reasoning": "Preview loads Google Fonts used in the banner"
+    "allowedDomains": [
+      "https://fonts.googleapis.com",
+      "https://fonts.gstatic.com",
+      "https://cdn.jsdelivr.net"
+    ],
+    "reasoning": "Preview loads Google Fonts used in the banner; the AVIF encoder (WebAssembly) is loaded from jsDelivr on first AVIF export"
   }
 }

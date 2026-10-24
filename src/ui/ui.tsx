@@ -3,13 +3,17 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { animationLength } from '../core/animate';
 import type { BundleItem } from '../core/bundle';
 import { bundleFiles, uniqueBases } from '../core/bundle';
+import type { OutputFile } from '../core/generate';
 import { generate } from '../core/generate';
-import { NETWORKS, validate } from '../core/networks';
+import { NETWORKS, effectiveDuration, validate } from '../core/networks';
 import { LEVELS, fitToLimit, optimizeAssets } from '../core/optimize';
-import type { BannerSettings, LayerAnim, NetworkId, Preset, PresetScope } from '../shared/anim';
-import { isEmptyAnim } from '../shared/anim';
+import type { AnimatedSettings, BackupFormat, BannerSettings, LayerAnim, NetworkId, Preset, PresetScope } from '../shared/anim';
+import { ANIMATED_FPS, isEmptyAnim } from '../shared/anim';
 import type { Banner, BannerNode } from '../shared/ir';
 import type { BuildPurpose, FrameInfo, LayerInfo, MainMessage, UiMessage } from '../shared/messages';
+import type { AnimatedFile, AnimatedResult } from './animated';
+import { buildAnimated } from './animated';
+import { encodeAvif } from './avif';
 import { canvasCodec } from './codec';
 import { LayerEditor } from './editor';
 import { download, previewHtml, slug, zipFiles } from './package';
@@ -43,6 +47,7 @@ interface ExportResult {
   kb: number;
   maxKb: number | null;
   problems: string[];
+  animated: { ext: string; kb: number; label: string; fits: boolean }[];
 }
 
 type Pending = { resolve: (r: BuildResult) => void; reject: (e: Error) => void };
@@ -71,6 +76,8 @@ function App() {
   const [lastExport, setLastExport] = useState<ExportResult[] | null>(null);
   const [lang, setLangState] = useState<Lang>(getLang());
   const [zoom, setZoom] = useState<Zoom>('fit');
+  const estimateCache = useRef<{ key: string; result: AnimatedResult } | null>(null);
+  const [estimate, setEstimate] = useState<Estimate | null>(null);
   const [seek, setSeek] = useState<number | null>(null);
   const [time, setTime] = useState(0);
   const [timelineHeight, setTimelineHeight] = useState(() => {
@@ -129,7 +136,7 @@ function App() {
   const pending = useRef(new Map<string, Pending>());
 
   /** Asks the main thread to read a frame from Figma; one request per frame and purpose at a time. */
-  function requestBuild(frameId: string, purpose: BuildPurpose, backup = false): Promise<BuildResult> {
+  function requestBuild(frameId: string, purpose: BuildPurpose, backup: 'jpg' | 'png' | null = null): Promise<BuildResult> {
     return new Promise((resolve, reject) => {
       pending.current.set(`${frameId}|${purpose}`, { resolve, reject });
       send({ type: 'build', frameId, purpose, backup });
@@ -193,8 +200,41 @@ function App() {
   }, [layers]);
 
   const network = NETWORKS[settings?.network ?? 'google-ads'];
-  const length = animationLength(Object.values(anims), network.maxDuration);
-  spanRef.current = timelineSpan(Object.values(anims), network.maxDuration);
+  const maxDuration = effectiveDuration(network, settings?.duration ?? null);
+  const length = animationLength(Object.values(anims), maxDuration);
+  spanRef.current = timelineSpan(Object.values(anims), maxDuration);
+
+  // GIF/WebP of the current frame, built in the background while the Export tab is open,
+  // so the size is known before exporting; the export reuses it when nothing changed.
+  useEffect(() => {
+    if (!built || !settings || tab !== 'export' || !(settings.animated.gif || settings.animated.webp)) return;
+    const net = NETWORKS[settings.network];
+    const max = effectiveDuration(net, settings.duration);
+    const gen = generate(built.banner, { clickTag: settings.clickTag, anims, maxDuration: max, platform: net.platform });
+    const duration = animationDuration(anims, max);
+    const key = animatedKey(gen, settings.animated, duration);
+    if (estimateCache.current?.key === key) {
+      setEstimate({ key, progress: 1, result: estimateCache.current.result });
+      return;
+    }
+    const signal = { cancelled: false };
+    const timer = setTimeout(async () => {
+      setEstimate({ key, progress: 0, result: null });
+      try {
+        const page = { html: gen.html, files: gen.files, width: built.banner.width, height: built.banner.height };
+        const result = await buildAnimated(page, settings.animated, duration, (progress) => !signal.cancelled && setEstimate({ key, progress, result: null }), signal);
+        if (!result || signal.cancelled) return;
+        estimateCache.current = { key, result };
+        setEstimate({ key, progress: 1, result });
+      } catch (err) {
+        if (!signal.cancelled) setEstimate({ key, progress: 1, result: null, error: errorText(err) });
+      }
+    }, 800);
+    return () => {
+      signal.cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [built, anims, settings, tab]);
 
   function changeLang(next: Lang) {
     setLang(next);
@@ -234,6 +274,7 @@ function App() {
     if (!settings || frames.length === 0) return;
     const net = NETWORKS[settings.network];
     const items: BundleItem[] = [];
+    const animatedOut: AnimatedFile[][] = [];
     const notesOut: string[] = [];
     const codec = canvasCodec();
     const maxBytes = net.maxKb === null ? null : net.maxKb * 1024;
@@ -241,10 +282,11 @@ function App() {
       const bases = uniqueBases(frames.map((f) => `${slug(f.name)}_${f.width}x${f.height}`));
       for (const [i, f] of frames.entries()) {
         setBusy(frames.length > 1 ? t(`Експортую ${i + 1} з ${frames.length}: ${f.name}`, `Exporting ${i + 1} of ${frames.length}: ${f.name}`) : t('Експортую…', 'Exporting…'));
-        const r = await requestBuild(f.id, 'export', settings.backup);
+        const r = await requestBuild(f.id, 'export', settings.backup ? (settings.backupFormat === 'jpg' ? 'jpg' : 'png') : null);
         // The edited frame uses the panel's state; other frames use what is stored on their layers.
         const frameAnims = f.id === frame?.id ? anims : r.anims;
-        const options = { clickTag: settings.clickTag, anims: frameAnims, maxDuration: net.maxDuration, platform: net.platform };
+        const frameMax = effectiveDuration(net, settings.duration);
+        const options = { clickTag: settings.clickTag, anims: frameAnims, maxDuration: frameMax, platform: net.platform };
         // Without auto-optimisation only the lossless first level runs.
         const fitted = await fitToLimit(maxBytes, settings.optimize ? LEVELS.length : 1, async (level) => {
           const assets = await optimizeAssets(r.banner.assets, LEVELS[level], codec);
@@ -253,7 +295,26 @@ function App() {
           return { bytes: zip.length, result: { gen, zip } };
         });
         const { gen, zip } = fitted.result;
-        const problems = validate(net, { width: r.banner.width, height: r.banner.height, zipBytes: zip.length, fileCount: gen.files.length });
+        const page = { width: r.banner.width, height: r.banner.height, ...generate(r.banner, options) };
+        let animated: AnimatedResult | null = null;
+        if (settings.animated.gif || settings.animated.webp) {
+          const key = animatedKey(page, settings.animated, animationDuration(frameAnims, frameMax));
+          const cached = estimateCache.current;
+          animated =
+            cached && cached.key === key
+              ? cached.result
+              : await buildAnimated(page, settings.animated, animationDuration(frameAnims, frameMax), (share) =>
+                  setBusy(t(`GIF/WebP ${frames.length > 1 ? `${i + 1}/${frames.length} ` : ''}${Math.round(share * 100)}%`, `GIF/WebP ${frames.length > 1 ? `${i + 1}/${frames.length} ` : ''}${Math.round(share * 100)}%`)),
+                );
+        }
+        const backup = r.backup && settings.backup ? await convertBackup(r.backup, settings.backupFormat) : null;
+        const problems = validate(net, {
+          width: r.banner.width,
+          height: r.banner.height,
+          zipBytes: zip.length,
+          fileCount: gen.files.length,
+          duration: animationLength(Object.values(frameAnims), frameMax),
+        });
         items.push({
           base: bases[i],
           name: f.name,
@@ -262,9 +323,11 @@ function App() {
           zip,
           previewHtml: gen.html,
           assets: gen.files.filter((file) => file.path.startsWith('img/')),
-          backup: r.backup,
+          backup,
+          animated: animated?.files.map((a) => ({ ext: a.ext, bytes: a.bytes })) ?? [],
           problems,
         });
+        animatedOut.push(animated?.files ?? []);
         const prefix = frames.length > 1 ? `${f.name}: ` : '';
         if (fitted.level > 0) {
           notesOut.push(
@@ -274,7 +337,7 @@ function App() {
         notesOut.push(...[...problems, ...gen.warnings, ...r.warnings].map((n) => prefix + n));
       }
 
-      if (items.length === 1 && !items[0].backup) {
+      if (items.length === 1 && !items[0].backup && items[0].animated.length === 0) {
         download(items[0].zip, `${items[0].base}.zip`, 'application/zip');
       } else {
         const title = items.length === 1 ? items[0].base : `banners_${items.length}`;
@@ -283,8 +346,9 @@ function App() {
       const totalKb = items.reduce((sum, item) => sum + item.zip.length, 0) / 1024;
       setNotes(notesOut);
       setLastExport(
-        items.map((item) => ({
+        items.map((item, i) => ({
           name: item.name,
+          animated: animatedOut[i].map((a) => ({ ext: a.ext, kb: a.bytes.length / 1024, label: a.label, fits: a.fits })),
           size: `${Math.round(item.width)}×${Math.round(item.height)}`,
           kb: item.zip.length / 1024,
           maxKb: net.maxKb,
@@ -326,7 +390,7 @@ function App() {
 
   const selected = layers.find((l) => l.id === selectedIds[0]) ?? null;
   const problemCount = lastExport?.reduce((n, item) => n + item.problems.length, 0) ?? 0;
-  const overTime = length !== 'infinite' && network.maxDuration !== null && length > network.maxDuration;
+  const overTime = network.maxDuration !== null && (length === 'infinite' || length > network.maxDuration);
   const exported = lastExport?.find((item) => item.name === frame.name) ?? null;
   const frameIndex = frames.findIndex((f) => f.id === frame.id);
 
@@ -372,7 +436,7 @@ function App() {
           <div class="badges">
             <span class={`badge${overTime ? ' bad' : ''}`} title={t('Тривалість анімації і ліміт мережі', 'Animation length and network limit')}>
               {length === 'infinite' ? '∞' : `${length} ${t('с', 's')}`}
-              {network.maxDuration !== null ? ` / ${network.maxDuration} ${t('с', 's')}` : ''}
+              {maxDuration !== null ? ` / ${maxDuration} ${t('с', 's')}` : ''}
             </span>
             {exported && (
               <span class={`badge${exported.maxKb !== null && exported.kb > exported.maxKb ? ' bad' : ''}`} title={t('Вага ZIP після останнього експорту', 'ZIP size after the last export')}>
@@ -389,7 +453,7 @@ function App() {
         <div class="timeline">
           <LayerTimeline
             layers={layers}
-            maxDuration={network.maxDuration}
+            maxDuration={maxDuration}
             selectedIds={selectedIds}
             ids={built?.ids ?? null}
             time={seek ?? time}
@@ -472,10 +536,21 @@ function App() {
                 <span>clickTag</span>
                 <input type="url" value={settings.clickTag} onChange={(e) => updateSettings({ clickTag: e.currentTarget.value.trim() })} />
               </label>
+              <DurationField network={network} value={settings.duration} onChange={(duration) => updateSettings({ duration })} />
               <label class="check">
                 <input type="checkbox" checked={settings.backup} onChange={(e) => updateSettings({ backup: e.currentTarget.checked })} />
-                {t('Додати backup JPG', 'Add backup JPG')}
+                {t('Додати статичний backup', 'Add a static backup')}
               </label>
+              {settings.backup && (
+                <label class="field">
+                  <span>{t('Формат backup', 'Backup format')}</span>
+                  <select value={settings.backupFormat} onChange={(e) => updateSettings({ backupFormat: e.currentTarget.value as BackupFormat })}>
+                    <option value="jpg">JPG</option>
+                    <option value="webp">WebP</option>
+                    <option value="avif">AVIF</option>
+                  </select>
+                </label>
+              )}
               <label class="check">
                 <input type="checkbox" checked={settings.optimize} onChange={(e) => updateSettings({ optimize: e.currentTarget.checked })} />
                 {t('Стискати картинки під ліміт', 'Compress images to fit the limit')}
@@ -490,6 +565,8 @@ function App() {
                 <dd>{network.maxDuration === null ? t('без ліміту', 'no limit') : `≤ ${network.maxDuration} ${t('с', 's')}`}</dd>
               </dl>
               {network.note && <p class="muted small">{network.note}</p>}
+              <hr />
+              <AnimatedPanel settings={settings.animated} estimate={estimate} onChange={(patch) => updateSettings({ animated: { ...settings.animated, ...patch } })} />
               {frames.length > 1 && (
                 <p class="muted small">
                   {t(
@@ -517,6 +594,11 @@ function App() {
                       <span class={`small ${item.maxKb !== null && item.kb > item.maxKb ? 'error' : 'ok'}`}>
                         {item.kb.toFixed(1)} KB{item.maxKb !== null ? t(` з ${item.maxKb} KB`, ` of ${item.maxKb} KB`) : ''}
                       </span>
+                      {item.animated.map((a) => (
+                        <span class={`small ${a.fits ? 'muted' : 'error'}`}>
+                          {a.ext.toUpperCase()}: {a.kb.toFixed(1)} KB · {a.label}
+                        </span>
+                      ))}
                       {item.problems.map((p) => (
                         <p class="error small">{p}</p>
                       ))}
@@ -558,6 +640,151 @@ function App() {
 }
 
 type Zoom = 'fit' | '0.5' | '1' | '2';
+
+interface Estimate {
+  key: string;
+  progress: number;
+  result: AnimatedResult | null;
+  error?: string;
+}
+
+/** GIF / WebP options with the expected file sizes for the current frame. */
+function AnimatedPanel(props: { settings: AnimatedSettings; estimate: Estimate | null; onChange: (patch: Partial<AnimatedSettings>) => void }) {
+  const { settings, estimate } = props;
+  const on = settings.gif || settings.webp;
+  return (
+    <>
+      <h3>{t('Анімована картинка', 'Animated image')}</h3>
+      <div class="row">
+        <label class="check">
+          <input type="checkbox" checked={settings.gif} onChange={(e) => props.onChange({ gif: e.currentTarget.checked })} />
+          GIF
+        </label>
+        <label class="check">
+          <input type="checkbox" checked={settings.webp} onChange={(e) => props.onChange({ webp: e.currentTarget.checked })} />
+          WebP
+        </label>
+      </div>
+      {on && (
+        <>
+          <label class="field">
+            <span>FPS</span>
+            <select value={String(settings.fps)} onChange={(e) => props.onChange({ fps: Number(e.currentTarget.value) })}>
+              {ANIMATED_FPS.map((f) => (
+                <option value={String(f)}>{f}</option>
+              ))}
+            </select>
+          </label>
+          <label class="field">
+            <span>{t('Стиснути до', 'Fit into')}</span>
+            <input
+              type="number"
+              min={10}
+              step={10}
+              placeholder={t('без стиснення', 'no compression')}
+              value={settings.maxKb ?? ''}
+              onInput={(e) => {
+                const v = parseFloat(e.currentTarget.value);
+                props.onChange({ maxKb: Number.isFinite(v) && v > 0 ? Math.round(v) : null });
+              }}
+            />
+          </label>
+          <p class="muted small">
+            {t(
+              'KB на кожен файл. Плагін зменшує кольори або якість, а за потреби FPS, поки файл не вміститься.',
+              'KB per file. The plugin lowers colours or quality, then FPS if needed, until the file fits.',
+            )}
+          </p>
+          <div class="estimate">
+            {!estimate || (estimate.progress < 1 && !estimate.result) ? (
+              <>
+                <span class="muted small">
+                  {t('Рахую вагу…', 'Measuring size…')} {estimate ? `${Math.round(estimate.progress * 100)}%` : ''}
+                </span>
+                <div class="meter">
+                  <span style={{ width: `${Math.round((estimate?.progress ?? 0) * 100)}%` }} />
+                </div>
+              </>
+            ) : estimate.error ? (
+              <span class="error small">{estimate.error}</span>
+            ) : (
+              estimate.result?.files.map((f) => {
+                const kb = f.bytes.length / 1024;
+                return (
+                  <div class="row between">
+                    <strong>
+                      {f.ext.toUpperCase()} {kb.toFixed(0)} KB
+                    </strong>
+                    <span class={`small ${f.fits ? 'muted' : 'error'}`}>{f.fits ? f.label : t('не вміщується', 'does not fit')}</span>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
+const DURATION_CHOICES = [10, 15, 20, 30];
+
+/** Total banner length: the network's limit, a common length, or any number of seconds. */
+function DurationField(props: { network: (typeof NETWORKS)[NetworkId]; value: number | null; onChange: (v: number | null) => void }) {
+  const { network, value } = props;
+  const [custom, setCustom] = useState(value !== null && !DURATION_CHOICES.includes(value));
+  const choice = value === null ? 'network' : custom ? 'custom' : String(value);
+  const s = t('с', 's');
+  const over = value !== null && network.maxDuration !== null && value > network.maxDuration;
+  return (
+    <>
+      <label class="field">
+        <span>{t('Тривалість', 'Duration')}</span>
+        <select
+          value={choice}
+          onChange={(e) => {
+            const v = e.currentTarget.value;
+            setCustom(v === 'custom');
+            if (v === 'network') props.onChange(null);
+            else if (v === 'custom') props.onChange(value ?? network.maxDuration ?? 30);
+            else props.onChange(Number(v));
+          }}
+        >
+          <option value="network">
+            {network.maxDuration === null ? t('Без обмеження', 'Unlimited') : t(`Ліміт мережі (${network.maxDuration} ${s})`, `Network limit (${network.maxDuration} ${s})`)}
+          </option>
+          {DURATION_CHOICES.map((d) => (
+            <option value={String(d)}>
+              {d} {s}
+            </option>
+          ))}
+          <option value="custom">{t('Своя…', 'Custom…')}</option>
+        </select>
+      </label>
+      {choice === 'custom' && (
+        <label class="field">
+          <span>{t('Секунд', 'Seconds')}</span>
+          <input
+            type="number"
+            min={1}
+            max={600}
+            step={1}
+            value={value ?? ''}
+            onChange={(e) => {
+              const v = parseFloat(e.currentTarget.value);
+              if (Number.isFinite(v) && v > 0) props.onChange(Math.min(600, Math.round(v * 10) / 10));
+            }}
+          />
+        </label>
+      )}
+      <p class={`small ${over ? 'error' : 'muted'}`}>
+        {over
+          ? t(`Довше за ліміт ${network.label} (${network.maxDuration} ${s}): мережа може відхилити банер.`, `Longer than the ${network.label} limit (${network.maxDuration} ${s}): the network may reject the banner.`)
+          : t('Цикли й повтори ключових кадрів обрізаються під цю тривалість.', 'Loops and keyframe repeats are cut to fit this length.')}
+      </p>
+    </>
+  );
+}
 
 const previewBusy = () => t('Готую превʼю…', 'Preparing preview…');
 
@@ -673,7 +900,7 @@ function Preview(props: {
     // Debounced so typing in a field does not restart the preview on every keystroke.
     const timer = setTimeout(() => {
       const net = NETWORKS[settings.network];
-      const { html, files } = generate(built.banner, { clickTag: settings.clickTag, anims, maxDuration: net.maxDuration, platform: net.platform });
+      const { html, files } = generate(built.banner, { clickTag: settings.clickTag, anims, maxDuration: effectiveDuration(net, settings.duration), platform: net.platform });
       // A comment that changes with each replay forces the iframe to reload.
       setDoc(previewHtml(html, files, blobs.current.urls) + `<!-- ${replay} -->`);
     }, 250);
@@ -720,6 +947,35 @@ function Preview(props: {
       </div>
     </div>
   );
+}
+
+/** Seconds of animation an animated GIF/WebP should hold. */
+function animationDuration(anims: Record<string, LayerAnim>, maxDuration: number | null): number {
+  const length = animationLength(Object.values(anims), maxDuration);
+  // Endless loops (no network limit) get a typical banner length.
+  const seconds = length === 'infinite' ? (maxDuration ?? 15) : length;
+  return Math.min(60, Math.max(0.5, seconds));
+}
+
+function animatedKey(page: { html: string; files: OutputFile[] }, settings: AnimatedSettings, duration: number): string {
+  // File sizes stand in for image contents, which the markup alone does not show.
+  const files = page.files.map((f) => `${f.path}:${f.data.length}`);
+  return JSON.stringify([page.html, files, settings, duration]);
+}
+
+/** The static backup in the chosen format; JPG comes from Figma as is, others from its PNG. */
+async function convertBackup(bytes: Uint8Array, format: BackupFormat): Promise<{ ext: string; bytes: Uint8Array }> {
+  if (format === 'jpg') return { ext: 'jpg', bytes };
+  const bitmap = await createImageBitmap(new Blob([bytes as Uint8Array<ArrayBuffer>], { type: 'image/png' }));
+  const canvas = document.createElement('canvas');
+  canvas.width = bitmap.width;
+  canvas.height = bitmap.height;
+  const g = canvas.getContext('2d')!;
+  g.drawImage(bitmap, 0, 0);
+  if (format === 'avif') return { ext: 'avif', bytes: await encodeAvif(g.getImageData(0, 0, canvas.width, canvas.height)) };
+  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/webp', 0.9));
+  if (!blob) throw new Error('WebP');
+  return { ext: 'webp', bytes: new Uint8Array(await blob.arrayBuffer()) };
 }
 
 function collectIds(node: BannerNode, out = new Set<string>()): Set<string> {

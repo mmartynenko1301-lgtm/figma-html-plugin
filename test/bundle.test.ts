@@ -9,7 +9,8 @@ const item = (base: string, backup: boolean) => ({
   zip: new Uint8Array(2048),
   previewHtml: '<!DOCTYPE html>',
   assets: [{ path: 'img/1.png', data: new Uint8Array(1) }],
-  backup: backup ? new Uint8Array(1) : null,
+  backup: backup ? { ext: 'jpg', bytes: new Uint8Array(1) } : null,
+  animated: [],
   problems: backup ? [] : ['Too heavy'],
 });
 

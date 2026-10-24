@@ -121,6 +121,13 @@ export interface ValidationInput {
   height: number;
   zipBytes: number;
   fileCount: number;
+  /** Animation length in seconds, when known. */
+  duration?: number | 'infinite';
+}
+
+/** Length loops are cut to: the banner's own choice, else the network's limit. */
+export function effectiveDuration(network: NetworkProfile, duration: number | null): number | null {
+  return duration ?? network.maxDuration;
 }
 
 /** Problems that would make the network reject the banner, in Ukrainian for the UI. */
@@ -136,6 +143,11 @@ export function validate(network: NetworkProfile, input: ValidationInput): strin
   const size = `${Math.round(input.width)}x${Math.round(input.height)}`;
   if (network.sizes && !network.sizes.includes(size)) {
     problems.push(t(`Розмір ${size.replace('x', '×')} не входить до дозволених розмірів ${network.label}.`, `Size ${size.replace('x', '×')} is not among the sizes ${network.label} accepts.`));
+  }
+  const limit = network.maxDuration;
+  if (limit !== null && input.duration !== undefined && (input.duration === 'infinite' || input.duration > limit)) {
+    const length = input.duration === 'infinite' ? '∞' : `${input.duration}`;
+    problems.push(t(`Анімація триває ${length} с, а ${network.label} дозволяє до ${limit} с.`, `The animation runs ${length} s but ${network.label} allows up to ${limit} s.`));
   }
   return problems;
 }

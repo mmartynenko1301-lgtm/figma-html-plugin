@@ -48,7 +48,8 @@ export type BuildPurpose = 'preview' | 'export';
 
 /** UI → main thread. */
 export type UiMessage =
-  | { type: 'build'; frameId: string; purpose: BuildPurpose; backup: boolean }
+  /** `backup` asks for a static image of the frame: JPG, or PNG for the UI to convert. */
+  | { type: 'build'; frameId: string; purpose: BuildPurpose; backup: 'jpg' | 'png' | null }
   | { type: 'set-anim'; nodeId: string; anim: LayerAnim | null }
   | { type: 'set-settings'; frameId: string; settings: BannerSettings }
   | { type: 'select-layer'; nodeId: string }

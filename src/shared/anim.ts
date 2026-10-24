@@ -107,9 +107,36 @@ export interface BannerSettings {
   backup: boolean;
   /** Shrink images on export until the ZIP fits the network's size limit. */
   optimize: boolean;
+  /** Total animation length in seconds that loops are cut to; null uses the network's limit. */
+  duration: number | null;
+  /** Format of the static backup image. */
+  backupFormat: BackupFormat;
+  /** Animated image exports besides the HTML5 ZIP. */
+  animated: AnimatedSettings;
 }
 
-export const DEFAULT_SETTINGS: BannerSettings = { v: 1, clickTag: 'https://example.com', network: 'google-ads', backup: true, optimize: true };
+export type BackupFormat = 'jpg' | 'webp' | 'avif';
+
+export interface AnimatedSettings {
+  gif: boolean;
+  webp: boolean;
+  fps: number;
+  /** Size each animated file is compressed to fit, in KB; null keeps full quality. */
+  maxKb: number | null;
+}
+
+export const ANIMATED_FPS = [8, 10, 12, 15, 20, 25];
+
+export const DEFAULT_SETTINGS: BannerSettings = {
+  v: 1,
+  clickTag: 'https://example.com',
+  network: 'google-ads',
+  backup: true,
+  optimize: true,
+  duration: null,
+  backupFormat: 'jpg',
+  animated: { gif: false, webp: false, fps: 15, maxKb: null },
+};
 
 export function defaultIntro(preset: IntroPreset): IntroAnim {
   const amount = preset === 'scaleIn' ? 0.6 : preset === 'zoomOut' ? 1.4 : preset === 'wordsUp' ? 16 : 24;
@@ -220,6 +247,20 @@ export function parseSettings(json: string): BannerSettings {
     network: networks.includes(raw.network) ? raw.network : DEFAULT_SETTINGS.network,
     backup: typeof raw.backup === 'boolean' ? raw.backup : DEFAULT_SETTINGS.backup,
     optimize: typeof raw.optimize === 'boolean' ? raw.optimize : DEFAULT_SETTINGS.optimize,
+    duration: typeof raw.duration === 'number' && raw.duration > 0 ? Math.min(raw.duration, 600) : null,
+    backupFormat: raw.backupFormat === 'webp' || raw.backupFormat === 'avif' ? raw.backupFormat : 'jpg',
+    animated: parseAnimated(raw.animated),
+  };
+}
+
+function parseAnimated(raw: any): AnimatedSettings {
+  const d = DEFAULT_SETTINGS.animated;
+  if (!raw || typeof raw !== 'object') return { ...d };
+  return {
+    gif: raw.gif === true,
+    webp: raw.webp === true,
+    fps: ANIMATED_FPS.includes(raw.fps) ? raw.fps : d.fps,
+    maxKb: typeof raw.maxKb === 'number' && raw.maxKb > 0 ? Math.round(raw.maxKb) : null,
   };
 }
 
