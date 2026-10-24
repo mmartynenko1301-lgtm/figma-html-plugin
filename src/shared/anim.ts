@@ -111,8 +111,22 @@ export interface BannerSettings {
   duration: number | null;
   /** Format of the static backup image. */
   backupFormat: BackupFormat;
-  /** Animated image exports besides the HTML5 ZIP. */
+  /** What the export produces: the HTML5 ZIP, animated GIF/WebP, or a static image. */
+  format: ExportFormat;
+  /** Animated GIF/WebP options. */
   animated: AnimatedSettings;
+  /** Static image options. */
+  image: ImageSettings;
+}
+
+export type ExportFormat = 'html' | 'animated' | 'image';
+
+export type ImageFormat = 'jpg' | 'png' | 'webp' | 'avif';
+
+export interface ImageSettings {
+  format: ImageFormat;
+  /** Pixel density of the exported image: 1 or 2. */
+  scale: number;
 }
 
 export type BackupFormat = 'jpg' | 'webp' | 'avif';
@@ -135,7 +149,9 @@ export const DEFAULT_SETTINGS: BannerSettings = {
   optimize: true,
   duration: null,
   backupFormat: 'jpg',
-  animated: { gif: false, webp: false, fps: 15, maxKb: null },
+  format: 'html',
+  animated: { gif: true, webp: false, fps: 15, maxKb: null },
+  image: { format: 'jpg', scale: 1 },
 };
 
 export function defaultIntro(preset: IntroPreset): IntroAnim {
@@ -239,7 +255,7 @@ function parseCustom(raw: any): CustomAnim | null {
 
 export function parseSettings(json: string): BannerSettings {
   const raw = parseJson(json);
-  if (!raw || raw.v !== 1) return { ...DEFAULT_SETTINGS };
+  if (!raw || raw.v !== 1) return { ...DEFAULT_SETTINGS, animated: { ...DEFAULT_SETTINGS.animated }, image: { ...DEFAULT_SETTINGS.image } };
   const networks: NetworkId[] = ['google-ads', 'google-dv', 'adform', 'admixer', 'iab', 'none'];
   return {
     v: 1,
@@ -249,16 +265,27 @@ export function parseSettings(json: string): BannerSettings {
     optimize: typeof raw.optimize === 'boolean' ? raw.optimize : DEFAULT_SETTINGS.optimize,
     duration: typeof raw.duration === 'number' && raw.duration > 0 ? Math.min(raw.duration, 600) : null,
     backupFormat: raw.backupFormat === 'webp' || raw.backupFormat === 'avif' ? raw.backupFormat : 'jpg',
+    format: raw.format === 'animated' || raw.format === 'image' ? raw.format : 'html',
     animated: parseAnimated(raw.animated),
+    image: parseImage(raw.image),
   };
+}
+
+function parseImage(raw: any): ImageSettings {
+  const formats: ImageFormat[] = ['jpg', 'png', 'webp', 'avif'];
+  if (!raw || typeof raw !== 'object') return { ...DEFAULT_SETTINGS.image };
+  return { format: formats.includes(raw.format) ? raw.format : 'jpg', scale: raw.scale === 2 ? 2 : 1 };
 }
 
 function parseAnimated(raw: any): AnimatedSettings {
   const d = DEFAULT_SETTINGS.animated;
   if (!raw || typeof raw !== 'object') return { ...d };
+  const gif = raw.gif === true;
+  const webp = raw.webp === true;
   return {
-    gif: raw.gif === true,
-    webp: raw.webp === true,
+    // At least one of the two is always on, so the animated export has something to make.
+    gif: gif || !webp,
+    webp,
     fps: ANIMATED_FPS.includes(raw.fps) ? raw.fps : d.fps,
     maxKb: typeof raw.maxKb === 'number' && raw.maxKb > 0 ? Math.round(raw.maxKb) : null,
   };
